@@ -133,6 +133,9 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen>
                       matchId: widget.matchId,
                       existing: predAsync.valueOrNull,
                       onSaved: () => _tabController.animateTo(0),
+                      liveOverride: ref
+                          .watch(matchLiveStateProvider(widget.matchId))
+                          .valueOrNull,
                     ),
                     _TeamsTab(match: match),
                   ],
@@ -630,11 +633,15 @@ class _PredictTab extends ConsumerStatefulWidget {
     required this.matchId,
     required this.existing,
     required this.onSaved,
+    this.liveOverride,
   });
   final MatchModel match;
   final int matchId;
   final PredictionModel? existing;
   final VoidCallback onSaved;
+  /// Live-streamed row from matchLiveStateProvider — may carry a fresher
+  /// status than the cached MatchModel when the match kicks off mid-session.
+  final Map<String, dynamic>? liveOverride;
 
   @override
   ConsumerState<_PredictTab> createState() => _PredictTabState();
@@ -646,10 +653,19 @@ class _PredictTabState extends ConsumerState<_PredictTab> {
   int? _firstTeamId;
   int? _scorerId;
   bool _saving = false;
-  String _playerSearch = '';
 
   bool get _isZeroZero => _score1 == 0 && _score2 == 0;
-  bool get _locked => widget.match.isLocked;
+
+  /// True when predictions must be locked.
+  /// Checks both the (potentially cached) MatchModel AND the live-streamed
+  /// status so that going live mid-session locks the form immediately.
+  bool get _locked {
+    if (widget.match.isLocked) return true;
+    final liveStatus = widget.liveOverride?['status'] as String?;
+    return liveStatus == 'live' ||
+        liveStatus == 'final' ||
+        liveStatus == 'cancelled';
+  }
 
   @override
   void initState() {
@@ -659,6 +675,9 @@ class _PredictTabState extends ConsumerState<_PredictTab> {
     _score2 = p?.predictedTeam2 ?? 0;
     _firstTeamId = p?.predictedFirstTeamId;
     _scorerId = p?.predictedScorerId;
+    // Apply constraints so a previously-saved prediction that violates the
+    // current rules (e.g. first-team from a 0-scoring side) is corrected.
+    _enforceConstraints();
   }
 
   @override
@@ -671,37 +690,54 @@ class _PredictTabState extends ConsumerState<_PredictTab> {
         _score2 = p.predictedTeam2 ?? 0;
         _firstTeamId = p.predictedFirstTeamId;
         _scorerId = p.predictedScorerId;
+        _enforceConstraints();
       });
     }
   }
 
   void _setScore1(int v) => setState(() {
         _score1 = v.clamp(0, 20);
-        _clearConditionalsIfNeeded();
+        _enforceConstraints();
       });
 
   void _setScore2(int v) => setState(() {
         _score2 = v.clamp(0, 20);
-        _clearConditionalsIfNeeded();
+        _enforceConstraints();
       });
 
-  void _clearConditionalsIfNeeded() {
+  /// Enforce all score-dependent constraints on firstTeamId and scorerId.
+  ///   • 0–0: clear both (no goals → no first scorer or goalscorer pick).
+  ///   • team1 = 0, team2 > 0: only team2 can be first scorer;
+  ///     clear scorerId if the selected player is from team1.
+  ///   • team1 > 0, team2 = 0: mirror of the above.
+  ///   • Both > 0: any selection is valid — no forced changes.
+  void _enforceConstraints() {
+    final t1Id = widget.match.team1?.id;
+    final t2Id = widget.match.team2?.id;
+
     if (_isZeroZero) {
       _firstTeamId = null;
       _scorerId = null;
+      return;
+    }
+
+    if (_score1 > 0 && _score2 == 0) {
+      _firstTeamId = t1Id;
+      if (_scorerId != null) {
+        final isTeam2 =
+            (widget.match.team2?.players ?? []).any((p) => p.id == _scorerId);
+        if (isTeam2) _scorerId = null;
+      }
+    } else if (_score2 > 0 && _score1 == 0) {
+      _firstTeamId = t2Id;
+      if (_scorerId != null) {
+        final isTeam1 =
+            (widget.match.team1?.players ?? []).any((p) => p.id == _scorerId);
+        if (isTeam1) _scorerId = null;
+      }
     }
   }
 
-  List<PlayerModel> get _allPlayers => [
-        ...widget.match.team1?.players ?? [],
-        ...widget.match.team2?.players ?? [],
-      ];
-
-  List<PlayerModel> get _filteredPlayers {
-    if (_playerSearch.isEmpty) return _allPlayers;
-    final q = _playerSearch.toLowerCase();
-    return _allPlayers.where((p) => p.name.toLowerCase().contains(q)).toList();
-  }
 
   Future<void> _save() async {
     if (_locked) return;
@@ -903,13 +939,6 @@ class _PredictTabState extends ConsumerState<_PredictTab> {
     }
 
     // ── Unlocked form ─────────────────────────────────────────────────
-    final t1Players = _filteredPlayers
-        .where((p) => p.teamId == (t1?.id ?? -1))
-        .toList();
-    final t2Players = _filteredPlayers
-        .where((p) => p.teamId == (t2?.id ?? -1))
-        .toList();
-
     return Column(
       children: [
         // ── Fixed score pickers (never scroll) ─────────────────────────────
@@ -981,6 +1010,7 @@ class _PredictTabState extends ConsumerState<_PredictTab> {
                   segments: [
                     ButtonSegment<int>(
                       value: t1?.id ?? 0,
+                      enabled: _score1 > 0,
                       label: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -992,6 +1022,7 @@ class _PredictTabState extends ConsumerState<_PredictTab> {
                     ),
                     ButtonSegment<int>(
                       value: t2?.id ?? 0,
+                      enabled: _score2 > 0,
                       label: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -1014,58 +1045,11 @@ class _PredictTabState extends ConsumerState<_PredictTab> {
                       ?.copyWith(color: AppColors.onSurfaceVariant),
                 ),
                 const SizedBox(height: 8),
-                TextField(
-                  decoration: const InputDecoration(
-                    prefixIcon: Icon(Icons.search, size: 18),
-                    hintText: 'Search players…',
-                    isDense: true,
-                  ),
-                  onChanged: (v) => setState(() => _playerSearch = v),
+                _ScorerPickerButton(
+                  scorerId: _scorerId,
+                  match: widget.match,
+                  onPick: (id) => setState(() => _scorerId = id),
                 ),
-                const SizedBox(height: 12),
-                if (t1 != null && t1Players.isNotEmpty) ...[
-                  Text(
-                    t1.name,
-                    style: theme.textTheme.labelSmall
-                        ?.copyWith(color: AppColors.onSurfaceMuted),
-                  ),
-                  const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 6,
-                    children: t1Players
-                        .map((p) => _PlayerChip(
-                              player: p,
-                              selected: p.id == _scorerId,
-                              onTap: () => setState(() =>
-                                  _scorerId =
-                                      _scorerId == p.id ? null : p.id),
-                            ))
-                        .toList(),
-                  ),
-                  const SizedBox(height: 12),
-                ],
-                if (t2 != null && t2Players.isNotEmpty) ...[
-                  Text(
-                    t2.name,
-                    style: theme.textTheme.labelSmall
-                        ?.copyWith(color: AppColors.onSurfaceMuted),
-                  ),
-                  const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 6,
-                    children: t2Players
-                        .map((p) => _PlayerChip(
-                              player: p,
-                              selected: p.id == _scorerId,
-                              onTap: () => setState(() =>
-                                  _scorerId =
-                                      _scorerId == p.id ? null : p.id),
-                            ))
-                        .toList(),
-                  ),
-                ],
               ],
               const SizedBox(height: 32),
             ],
@@ -1379,6 +1363,311 @@ class _PlayerChip extends StatelessWidget {
     );
   }
 }
+// ---------------------------------------------------------------------------
+// _ScorerPickerButton — tappable row showing the currently selected scorer
+// ---------------------------------------------------------------------------
+
+class _ScorerPickerButton extends StatelessWidget {
+  const _ScorerPickerButton({
+    required this.scorerId,
+    required this.match,
+    required this.onPick,
+  });
+
+  final int? scorerId;
+  final MatchModel match;
+  final ValueChanged<int?> onPick;
+
+  PlayerModel? get _selectedPlayer {
+    if (scorerId == null) return null;
+    final all = [
+      ...match.team1?.players ?? [],
+      ...match.team2?.players ?? [],
+    ];
+    try {
+      return all.firstWhere((p) => p.id == scorerId);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final player = _selectedPlayer;
+
+    return InkWell(
+      onTap: () async {
+        final picked = await showModalBottomSheet<int?>(
+          context: context,
+          isScrollControlled: true,
+          useSafeArea: true,
+          backgroundColor: Colors.transparent,
+          builder: (_) => _ScorerPickerSheet(
+            match: match,
+            currentScorerId: scorerId,
+          ),
+        );
+        // picked == null means the sheet was dismissed without a choice;
+        // picked == -1 is the sentinel for "clear selection".
+        if (picked == -1) {
+          onPick(null);
+        } else if (picked != null) {
+          onPick(picked);
+        }
+      },
+      borderRadius: AppRadii.buttonRadius,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: AppColors.surfaceHigh,
+          borderRadius: AppRadii.buttonRadius,
+          border: Border.all(
+            color: player != null ? AppColors.primary : AppColors.outline,
+            width: player != null ? 1.5 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            if (player != null) ...[
+              _PositionBadge(position: player.position),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  player.name,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: AppColors.onSurface,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              GestureDetector(
+                onTap: () => onPick(null),
+                child: const Icon(Icons.close,
+                    size: 16, color: AppColors.onSurfaceMuted),
+              ),
+            ] else ...[
+              const Icon(Icons.search,
+                  size: 16, color: AppColors.onSurfaceMuted),
+              const SizedBox(width: 8),
+              Text(
+                'Pick a goalscorer…',
+                style: theme.textTheme.bodyMedium
+                    ?.copyWith(color: AppColors.onSurfaceMuted),
+              ),
+              const Spacer(),
+              const Icon(Icons.chevron_right,
+                  size: 18, color: AppColors.onSurfaceMuted),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// _ScorerPickerSheet — full-height bottom sheet with search + team groups
+// ---------------------------------------------------------------------------
+
+class _ScorerPickerSheet extends StatefulWidget {
+  const _ScorerPickerSheet({required this.match, required this.currentScorerId});
+  final MatchModel match;
+  final int? currentScorerId;
+
+  @override
+  State<_ScorerPickerSheet> createState() => _ScorerPickerSheetState();
+}
+
+class _ScorerPickerSheetState extends State<_ScorerPickerSheet> {
+  late final TextEditingController _searchCtrl;
+  String _query = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _searchCtrl = TextEditingController();
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  List<PlayerModel> _filtered(List<PlayerModel>? players) {
+    if (players == null) return [];
+    if (_query.isEmpty) return players;
+    final q = _query.toLowerCase();
+    return players.where((p) => p.name.toLowerCase().contains(q)).toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final t1 = widget.match.team1;
+    final t2 = widget.match.team2;
+    final t1Players = _filtered(t1?.players);
+    final t2Players = _filtered(t2?.players);
+    final hasAny = t1Players.isNotEmpty || t2Players.isNotEmpty;
+
+    return DraggableScrollableSheet(
+      initialChildSize: 0.92,
+      minChildSize: 0.5,
+      maxChildSize: 0.95,
+      expand: false,
+      builder: (_, scrollController) => Container(
+        decoration: const BoxDecoration(
+          color: AppColors.surfaceBase,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          children: [
+            // Drag handle
+            Padding(
+              padding: const EdgeInsets.only(top: 10, bottom: 4),
+              child: Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppColors.outlineVariant,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            // Header
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text('Pick Goalscorer',
+                        style: theme.textTheme.titleMedium
+                            ?.copyWith(color: AppColors.onSurface)),
+                  ),
+                  if (widget.currentScorerId != null)
+                    TextButton(
+                      onPressed: () => Navigator.of(context).pop(-1),
+                      style: TextButton.styleFrom(
+                        foregroundColor: AppColors.error,
+                        padding: EdgeInsets.zero,
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      child: const Text('Clear'),
+                    ),
+                ],
+              ),
+            ),
+            // Search
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: TextField(
+                controller: _searchCtrl,
+                autofocus: true,
+                decoration: InputDecoration(
+                  prefixIcon:
+                      const Icon(Icons.search, size: 18),
+                  hintText: 'Search players…',
+                  isDense: true,
+                  suffixIcon: _query.isNotEmpty
+                      ? IconButton(
+                          icon: const Icon(Icons.clear, size: 16),
+                          onPressed: () {
+                            _searchCtrl.clear();
+                            setState(() => _query = '');
+                          },
+                        )
+                      : null,
+                ),
+                onChanged: (v) => setState(() => _query = v),
+              ),
+            ),
+            // Player list
+            Expanded(
+              child: hasAny
+                  ? ListView(
+                      controller: scrollController,
+                      padding:
+                          const EdgeInsets.fromLTRB(16, 0, 16, 32),
+                      children: [
+                        if (t1 != null && t1Players.isNotEmpty) ...[
+                          _TeamGroupHeader(team: t1),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: t1Players
+                                .map((p) => _PlayerChip(
+                                      player: p,
+                                      selected:
+                                          p.id == widget.currentScorerId,
+                                      onTap: () =>
+                                          Navigator.of(context).pop(p.id),
+                                    ))
+                                .toList(),
+                          ),
+                          const SizedBox(height: 16),
+                        ],
+                        if (t2 != null && t2Players.isNotEmpty) ...[
+                          _TeamGroupHeader(team: t2),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: t2Players
+                                .map((p) => _PlayerChip(
+                                      player: p,
+                                      selected:
+                                          p.id == widget.currentScorerId,
+                                      onTap: () =>
+                                          Navigator.of(context).pop(p.id),
+                                    ))
+                                .toList(),
+                          ),
+                        ],
+                      ],
+                    )
+                  : Center(
+                      child: Text(
+                        _query.isNotEmpty
+                            ? 'No players match "$_query"'
+                            : 'No player data available',
+                        style: theme.textTheme.bodyMedium
+                            ?.copyWith(color: AppColors.onSurfaceMuted),
+                      ),
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TeamGroupHeader extends StatelessWidget {
+  const _TeamGroupHeader({required this.team});
+  final TeamModel team;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          TeamFlag(team: team, size: 16),
+          const SizedBox(width: 8),
+          Text(
+            team.name,
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                  color: AppColors.onSurfaceVariant,
+                  fontWeight: FontWeight.w700,
+                ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Formation Pitch
 // ---------------------------------------------------------------------------
