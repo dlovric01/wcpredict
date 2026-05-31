@@ -1114,16 +1114,77 @@ class _PredictTabState extends ConsumerState<_PredictTab> {
 }
 
 // ---------------------------------------------------------------------------
-// Teams Tab — placeholder (Task 4 fills this in)
+// Teams Tab
 // ---------------------------------------------------------------------------
 
 class _TeamsTab extends StatelessWidget {
   const _TeamsTab({required this.match});
   final MatchModel match;
 
+  bool get _hasLineups {
+    final t1 = match.team1?.players;
+    final t2 = match.team2?.players;
+    return (t1 != null && t1.isNotEmpty) || (t2 != null && t2.isNotEmpty);
+  }
+
   @override
   Widget build(BuildContext context) {
-    return const Center(child: Text('Teams — coming soon'));
+    final theme = Theme.of(context);
+
+    if (!_hasLineups) {
+      return Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Symbols.group,
+                size: 40, color: AppColors.onSurfaceMuted),
+            const SizedBox(height: 12),
+            Text(
+              'Lineups not yet announced',
+              style: theme.textTheme.bodyMedium
+                  ?.copyWith(color: AppColors.onSurfaceMuted),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (match.formationTeam1 != null || match.formationTeam2 != null)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                children: [
+                  if (match.team1 != null)
+                    Text(
+                      '${match.team1!.code}  ${match.formationTeam1 ?? ''}',
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        color: AppColors.onSurfaceVariant,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  const Spacer(),
+                  if (match.team2 != null)
+                    Text(
+                      '${match.formationTeam2 ?? ''}  ${match.team2!.code}',
+                      style: theme.textTheme.labelMedium?.copyWith(
+                        color: AppColors.onSurfaceVariant,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          _FormationPitch(match: match),
+          const SizedBox(height: 16),
+          _SubstitutesList(match: match),
+        ],
+      ),
+    );
   }
 }
 
@@ -1318,52 +1379,6 @@ class _PlayerChip extends StatelessWidget {
     );
   }
 }
-
-class _LineupsSection extends StatelessWidget {
-  const _LineupsSection({required this.match});
-  final MatchModel match;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final labelSmall = theme.textTheme.labelSmall
-        ?.copyWith(color: AppColors.onSurfaceVariant, fontWeight: FontWeight.w600);
-
-    return Theme(
-      data: Theme.of(context).copyWith(dividerColor: AppColors.outline),
-      child: Container(
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          borderRadius: AppRadii.cardRadius,
-          border: Border.all(color: AppColors.outline),
-        ),
-        child: ExpansionTile(
-          title: Row(
-            children: [
-              Text('Lineups', style: theme.textTheme.titleMedium),
-              if (match.formationTeam1 != null) ...[
-                const Spacer(),
-                Text('${match.team1?.code}  ${match.formationTeam1}', style: labelSmall),
-                const SizedBox(width: 8),
-                Text('${match.formationTeam2}  ${match.team2?.code}', style: labelSmall),
-              ],
-            ],
-          ),
-          iconColor: AppColors.onSurfaceVariant,
-          collapsedIconColor: AppColors.onSurfaceVariant,
-          tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-          childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-          children: [
-            _FormationPitch(match: match),
-            const SizedBox(height: 12),
-            _SubstitutesList(match: match),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Formation Pitch
 // ---------------------------------------------------------------------------
