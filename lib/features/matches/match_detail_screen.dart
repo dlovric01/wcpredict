@@ -716,7 +716,7 @@ class _PredictTabState extends ConsumerState<_PredictTab> {
           'match_id': widget.match.id,
           'predicted_team1': _score1,
           'predicted_team2': _score2,
-          'predicted_first_team_id': _isZeroZero ? null : _firstTeamId,
+          'predicted_first_team_id': _isZeroZero ? null : (_firstTeamId ?? widget.match.team1?.id),
           'predicted_scorer_id': _isZeroZero ? null : _scorerId,
         },
         onConflict: 'user_id,match_id',
