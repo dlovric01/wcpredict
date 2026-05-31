@@ -388,7 +388,8 @@ class _LiveChipState extends State<_LiveChip>
 }
 
 // ---------------------------------------------------------------------------
-// Overview Tab — placeholder (Task 2 fills this in)
+// ---------------------------------------------------------------------------
+// Overview Tab
 // ---------------------------------------------------------------------------
 
 class _OverviewTab extends ConsumerWidget {
@@ -405,7 +406,219 @@ class _OverviewTab extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    return const Center(child: Text('Overview — coming soon'));
+    final isFinalOrLive =
+        match.status == 'final' || match.status == 'live';
+
+    return RefreshIndicator(
+      color: AppColors.primary,
+      backgroundColor: AppColors.surface,
+      onRefresh: () async {
+        ref.invalidate(matchByIdProvider(matchId));
+        ref.invalidate(matchEventsProvider(matchId));
+        ref.invalidate(myPredictionProvider(matchId));
+      },
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+        children: isFinalOrLive
+            ? [
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Text(
+                    'Match Events',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                          color: AppColors.onSurface,
+                        ),
+                  ),
+                ),
+                LiveEventsWidget(matchId: matchId),
+              ]
+            : [
+                _MatchInfoCard(match: match),
+                const SizedBox(height: 12),
+                _PredictionSummaryCard(
+                  match: match,
+                  prediction: prediction,
+                  onPredictTap: onPredictTap,
+                ),
+              ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// _MatchInfoCard
+// ---------------------------------------------------------------------------
+
+class _MatchInfoCard extends StatelessWidget {
+  const _MatchInfoCard({required this.match});
+  final MatchModel match;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final kickoff = match.kickoffTime;
+    final dateStr = kickoff != null
+        ? DateFormat('EEEE d MMMM yyyy · HH:mm').format(kickoff.toLocal())
+        : null;
+
+    final rows = <(IconData, String)>[
+      if (match.round != null) (Symbols.emoji_events, match.round!),
+      if (match.groupLetter != null)
+        (Symbols.group, 'Group ${match.groupLetter}'),
+      if (dateStr != null) (Symbols.schedule, dateStr),
+    ];
+
+    if (rows.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: AppRadii.cardRadius,
+        border: Border.all(color: AppColors.outline),
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Match Info',
+              style: theme.textTheme.titleSmall
+                  ?.copyWith(color: AppColors.onSurface)),
+          const SizedBox(height: 10),
+          for (final (icon, label) in rows) ...[
+            Row(
+              children: [
+                Icon(icon, size: 15, color: AppColors.onSurfaceVariant),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    label,
+                    style: theme.textTheme.bodyMedium
+                        ?.copyWith(color: AppColors.onSurfaceVariant),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// _PredictionSummaryCard
+// ---------------------------------------------------------------------------
+
+class _PredictionSummaryCard extends StatelessWidget {
+  const _PredictionSummaryCard({
+    required this.match,
+    required this.prediction,
+    required this.onPredictTap,
+  });
+  final MatchModel match;
+  final PredictionModel? prediction;
+  final VoidCallback onPredictTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final locked = match.isLocked;
+    final pred = prediction;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: AppRadii.cardRadius,
+        border: Border.all(color: AppColors.outline),
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Your Prediction',
+              style: theme.textTheme.titleSmall
+                  ?.copyWith(color: AppColors.onSurface)),
+          const SizedBox(height: 10),
+          if (pred != null) ...[
+            Text(
+              '${pred.predictedTeam1 ?? '?'} – ${pred.predictedTeam2 ?? '?'}',
+              style: theme.textTheme.titleLarge?.copyWith(
+                color: AppColors.onSurface,
+                fontWeight: FontWeight.w800,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+            if (pred.predictedScorerId != null) ...[
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  const Icon(Symbols.sports_soccer,
+                      size: 13, color: AppColors.onSurfaceVariant),
+                  const SizedBox(width: 5),
+                  Text(
+                    'Goalscorer pick submitted',
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: AppColors.onSurfaceVariant),
+                  ),
+                ],
+              ),
+            ],
+            if (!locked) ...[
+              const SizedBox(height: 8),
+              TextButton(
+                onPressed: onPredictTap,
+                style: TextButton.styleFrom(
+                  foregroundColor: AppColors.primary,
+                  padding: EdgeInsets.zero,
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                child: const Text('Edit prediction →'),
+              ),
+            ],
+          ] else if (!locked) ...[
+            Text(
+              "You haven't predicted yet.",
+              style: theme.textTheme.bodyMedium
+                  ?.copyWith(color: AppColors.onSurfaceVariant),
+            ),
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: onPredictTap,
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: AppColors.onPrimary,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: AppRadii.buttonRadius),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+                child: const Text(
+                  'Predict this match',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+            ),
+          ] else ...[
+            Row(
+              children: [
+                const Icon(Symbols.lock,
+                    size: 15, color: AppColors.locked),
+                const SizedBox(width: 6),
+                Text(
+                  'Predictions closed',
+                  style: theme.textTheme.bodyMedium
+                      ?.copyWith(color: AppColors.locked),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
   }
 }
 
