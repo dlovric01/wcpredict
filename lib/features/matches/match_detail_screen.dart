@@ -414,7 +414,7 @@ class _OverviewTab extends ConsumerWidget {
       backgroundColor: AppColors.surface,
       onRefresh: () async {
         ref.invalidate(matchByIdProvider(matchId));
-        ref.invalidate(matchEventsProvider(matchId));
+        ref.invalidate(matchEventsStreamProvider(matchId));
         ref.invalidate(myPredictionProvider(matchId));
       },
       child: ListView(
