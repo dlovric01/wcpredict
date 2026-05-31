@@ -1433,7 +1433,7 @@ class _FormationPitch extends StatelessWidget {
         final col = int.tryParse(parts.length > 1 ? parts[1] : '1') ?? 1;
         final countInRow = t1RowCounts[row] ?? 1;
         final xFrac = col / (countInRow + 1);
-        final yFrac = 0.04 + (t1MaxRow - row) / t1MaxRow * 0.40;
+        final yFrac = 0.04 + (row - 1) / t1MaxRow * 0.40;
         final x = (xFrac * width - 14).clamp(0.0, width - 28);
         final y = (yFrac * height - 14).clamp(0.0, height - 28);
         dots.add(Positioned(
@@ -1449,7 +1449,7 @@ class _FormationPitch extends StatelessWidget {
         final col = int.tryParse(parts.length > 1 ? parts[1] : '1') ?? 1;
         final countInRow = t2RowCounts[row] ?? 1;
         final xFrac = col / (countInRow + 1);
-        final yFrac = 0.56 + (row - 1) / t2MaxRow * 0.40;
+        final yFrac = 0.56 + (t2MaxRow - row) / t2MaxRow * 0.40;
         final x = (xFrac * width - 14).clamp(0.0, width - 28);
         final y = (yFrac * height - 14).clamp(0.0, height - 28);
         dots.add(Positioned(
