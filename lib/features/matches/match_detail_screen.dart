@@ -1,5 +1,3 @@
-import 'dart:ui' show FontFeature;
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -623,7 +621,7 @@ class _PredictionSummaryCard extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Predict Tab — placeholder (Task 3 fills this in)
+// Predict Tab
 // ---------------------------------------------------------------------------
 
 class _PredictTab extends ConsumerStatefulWidget {
@@ -643,9 +641,475 @@ class _PredictTab extends ConsumerStatefulWidget {
 }
 
 class _PredictTabState extends ConsumerState<_PredictTab> {
+  late int _score1;
+  late int _score2;
+  int? _firstTeamId;
+  int? _scorerId;
+  bool _saving = false;
+  String _playerSearch = '';
+
+  bool get _isZeroZero => _score1 == 0 && _score2 == 0;
+  bool get _locked => widget.match.isLocked;
+
+  @override
+  void initState() {
+    super.initState();
+    final p = widget.existing;
+    _score1 = p?.predictedTeam1 ?? 0;
+    _score2 = p?.predictedTeam2 ?? 0;
+    _firstTeamId = p?.predictedFirstTeamId;
+    _scorerId = p?.predictedScorerId;
+  }
+
+  @override
+  void didUpdateWidget(_PredictTab old) {
+    super.didUpdateWidget(old);
+    if (old.existing == null && widget.existing != null) {
+      final p = widget.existing!;
+      setState(() {
+        _score1 = p.predictedTeam1 ?? 0;
+        _score2 = p.predictedTeam2 ?? 0;
+        _firstTeamId = p.predictedFirstTeamId;
+        _scorerId = p.predictedScorerId;
+      });
+    }
+  }
+
+  void _setScore1(int v) => setState(() {
+        _score1 = v.clamp(0, 20);
+        _clearConditionalsIfNeeded();
+      });
+
+  void _setScore2(int v) => setState(() {
+        _score2 = v.clamp(0, 20);
+        _clearConditionalsIfNeeded();
+      });
+
+  void _clearConditionalsIfNeeded() {
+    if (_isZeroZero) {
+      _firstTeamId = null;
+      _scorerId = null;
+    }
+  }
+
+  List<PlayerModel> get _allPlayers => [
+        ...widget.match.team1?.players ?? [],
+        ...widget.match.team2?.players ?? [],
+      ];
+
+  List<PlayerModel> get _filteredPlayers {
+    if (_playerSearch.isEmpty) return _allPlayers;
+    final q = _playerSearch.toLowerCase();
+    return _allPlayers.where((p) => p.name.toLowerCase().contains(q)).toList();
+  }
+
+  Future<void> _save() async {
+    if (_locked) return;
+    setState(() => _saving = true);
+    try {
+      final user = supabase.auth.currentUser;
+      if (user == null) throw Exception('Not authenticated');
+
+      await supabase.from('predictions').upsert(
+        {
+          'user_id': user.id,
+          'match_id': widget.match.id,
+          'predicted_team1': _score1,
+          'predicted_team2': _score2,
+          'predicted_first_team_id': _isZeroZero ? null : _firstTeamId,
+          'predicted_scorer_id': _isZeroZero ? null : _scorerId,
+        },
+        onConflict: 'user_id,match_id',
+      );
+
+      ref.invalidate(myPredictionProvider(widget.matchId));
+      ref.invalidate(matchByIdProvider(widget.matchId));
+
+      if (mounted) {
+        HapticFeedback.mediumImpact();
+        widget.onSaved();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return const Center(child: Text('Predict — coming soon'));
+    final theme = Theme.of(context);
+    final t1 = widget.match.team1;
+    final t2 = widget.match.team2;
+
+    // ── Locked state ─────────────────────────────────────────────────────
+    if (_locked) {
+      final pred = widget.existing;
+      final isFinal = widget.match.status == 'final';
+
+      return SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceHigh,
+                borderRadius: AppRadii.buttonRadius,
+                border: Border.all(color: AppColors.locked),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.lock_outline,
+                      color: AppColors.locked, size: 15),
+                  const SizedBox(width: 8),
+                  Text(
+                    isFinal
+                        ? 'Predictions closed · Full time'
+                        : 'Predictions locked · Match has started',
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: AppColors.locked),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            if (pred == null) ...[
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: AppColors.surface,
+                  borderRadius: AppRadii.cardRadius,
+                  border: Border.all(color: AppColors.outline),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Symbols.lock,
+                        size: 16, color: AppColors.onSurfaceVariant),
+                    const SizedBox(width: 8),
+                    Text(
+                      'No prediction submitted',
+                      style: theme.textTheme.bodyMedium
+                          ?.copyWith(color: AppColors.onSurfaceVariant),
+                    ),
+                  ],
+                ),
+              ),
+            ] else ...[
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: AppColors.surface,
+                  borderRadius: AppRadii.cardRadius,
+                  border: Border.all(color: AppColors.outline),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      isFinal ? 'Your Result' : 'Your Prediction',
+                      style: theme.textTheme.titleSmall
+                          ?.copyWith(color: AppColors.onSurface),
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                isFinal ? 'Actual' : 'Live',
+                                style: theme.textTheme.labelSmall?.copyWith(
+                                    color: AppColors.onSurfaceVariant),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                '${widget.match.scoreFtTeam1 ?? 0}'
+                                ' – '
+                                '${widget.match.scoreFtTeam2 ?? 0}',
+                                style: theme.textTheme.titleLarge?.copyWith(
+                                  color: AppColors.onSurface,
+                                  fontWeight: FontWeight.w800,
+                                  fontFeatures: const [
+                                    FontFeature.tabularFigures()
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Container(
+                            width: 1, height: 40, color: AppColors.outline),
+                        Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.only(left: 16),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'You',
+                                  style: theme.textTheme.labelSmall?.copyWith(
+                                      color: AppColors.onSurfaceVariant),
+                                ),
+                                const SizedBox(height: 2),
+                                Text(
+                                  '${pred.predictedTeam1 ?? '?'}'
+                                  ' – '
+                                  '${pred.predictedTeam2 ?? '?'}',
+                                  style: theme.textTheme.titleLarge?.copyWith(
+                                    color: AppColors.onSurface,
+                                    fontWeight: FontWeight.w800,
+                                    fontFeatures: const [
+                                      FontFeature.tabularFigures()
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (isFinal && pred.pointsEarned != null) ...[
+                      const SizedBox(height: 12),
+                      VerdictPill(
+                          points: pred.pointsEarned,
+                          scorePoints: pred.pointsScore),
+                    ] else if (!isFinal) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        'Points update at full time',
+                        style: theme.textTheme.bodySmall
+                            ?.copyWith(color: AppColors.onSurfaceMuted),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      );
+    }
+
+    // ── Unlocked form ─────────────────────────────────────────────────
+    final t1Players = _filteredPlayers
+        .where((p) => p.teamId == (t1?.id ?? -1))
+        .toList();
+    final t2Players = _filteredPlayers
+        .where((p) => p.teamId == (t2?.id ?? -1))
+        .toList();
+
+    return Column(
+      children: [
+        // ── Fixed score pickers (never scroll) ─────────────────────────────
+        Padding(
+          padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: _ScorePicker(
+                  value: _score1,
+                  team: t1,
+                  onChanged: _setScore1,
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Text(
+                  '–',
+                  style: theme.textTheme.displaySmall?.copyWith(
+                    color: AppColors.onSurfaceMuted,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ),
+              Expanded(
+                child: _ScorePicker(
+                  value: _score2,
+                  team: t2,
+                  onChanged: _setScore2,
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        const Divider(height: 1),
+
+        // ── Scrollable: first scorer + goalscorer ───────────────────────────
+        Expanded(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+            children: [
+              if (_isZeroZero)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.info_outline,
+                          size: 14, color: AppColors.onSurfaceMuted),
+                      const SizedBox(width: 6),
+                      Text(
+                        'Set a score to unlock first scorer & goalscorer picks',
+                        style: theme.textTheme.bodySmall
+                            ?.copyWith(color: AppColors.onSurfaceMuted),
+                      ),
+                    ],
+                  ),
+                ),
+
+              if (!_isZeroZero) ...[
+                Text(
+                  'First Team to Score',
+                  style: theme.textTheme.labelLarge
+                      ?.copyWith(color: AppColors.onSurfaceVariant),
+                ),
+                const SizedBox(height: 8),
+                SegmentedButton<int>(
+                  segments: [
+                    ButtonSegment<int>(
+                      value: t1?.id ?? 0,
+                      label: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          TeamFlag(team: t1, size: 16),
+                          const SizedBox(width: 5),
+                          Text(t1?.code ?? 'T1'),
+                        ],
+                      ),
+                    ),
+                    ButtonSegment<int>(
+                      value: t2?.id ?? 0,
+                      label: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          TeamFlag(team: t2, size: 16),
+                          const SizedBox(width: 5),
+                          Text(t2?.code ?? 'T2'),
+                        ],
+                      ),
+                    ),
+                  ],
+                  selected: {_firstTeamId ?? (t1?.id ?? 0)},
+                  onSelectionChanged: (s) =>
+                      setState(() => _firstTeamId = s.first),
+                ),
+
+                const SizedBox(height: 20),
+                Text(
+                  'Goalscorer (optional)',
+                  style: theme.textTheme.labelLarge
+                      ?.copyWith(color: AppColors.onSurfaceVariant),
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  decoration: const InputDecoration(
+                    prefixIcon: Icon(Icons.search, size: 18),
+                    hintText: 'Search players…',
+                    isDense: true,
+                  ),
+                  onChanged: (v) => setState(() => _playerSearch = v),
+                ),
+                const SizedBox(height: 12),
+                if (t1 != null && t1Players.isNotEmpty) ...[
+                  Text(
+                    t1.name,
+                    style: theme.textTheme.labelSmall
+                        ?.copyWith(color: AppColors.onSurfaceMuted),
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: t1Players
+                        .map((p) => _PlayerChip(
+                              player: p,
+                              selected: p.id == _scorerId,
+                              onTap: () => setState(() =>
+                                  _scorerId =
+                                      _scorerId == p.id ? null : p.id),
+                            ))
+                        .toList(),
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                if (t2 != null && t2Players.isNotEmpty) ...[
+                  Text(
+                    t2.name,
+                    style: theme.textTheme.labelSmall
+                        ?.copyWith(color: AppColors.onSurfaceMuted),
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: t2Players
+                        .map((p) => _PlayerChip(
+                              player: p,
+                              selected: p.id == _scorerId,
+                              onTap: () => setState(() =>
+                                  _scorerId =
+                                      _scorerId == p.id ? null : p.id),
+                            ))
+                        .toList(),
+                  ),
+                ],
+              ],
+              const SizedBox(height: 32),
+            ],
+          ),
+        ),
+
+        // ── Save button — pinned ───────────────────────────────────────────
+        SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            child: SizedBox(
+              width: double.infinity,
+              child: FilledButton(
+                onPressed: _saving ? null : _save,
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  foregroundColor: AppColors.onPrimary,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: AppRadii.buttonRadius),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+                child: _saving
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppColors.onPrimary,
+                        ),
+                      )
+                    : Text(
+                        widget.existing != null
+                            ? 'Update Prediction'
+                            : 'Save Prediction',
+                        style:
+                            const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
   }
 }
 
@@ -660,6 +1124,198 @@ class _TeamsTab extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const Center(child: Text('Teams — coming soon'));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// _ScorePicker
+// ---------------------------------------------------------------------------
+
+class _ScorePicker extends StatelessWidget {
+  const _ScorePicker({
+    required this.value,
+    required this.team,
+    required this.onChanged,
+  });
+
+  final int value;
+  final TeamModel? team;
+  final ValueChanged<int> onChanged;
+
+  void _inc() {
+    if (value >= 20) return;
+    HapticFeedback.selectionClick();
+    onChanged(value + 1);
+  }
+
+  void _dec() {
+    if (value <= 0) return;
+    HapticFeedback.selectionClick();
+    onChanged(value - 1);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final highlight = value > 0;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        TeamFlag(team: team, tbd: team == null, size: 28),
+        const SizedBox(height: 4),
+        Text(
+          team?.code ?? '—',
+          style: theme.textTheme.labelMedium
+              ?.copyWith(color: AppColors.onSurfaceVariant),
+        ),
+        const SizedBox(height: 8),
+        GestureDetector(
+          onTap: _inc,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 150),
+            width: 80,
+            height: 64,
+            decoration: BoxDecoration(
+              color: highlight
+                  ? AppColors.primaryContainer
+                  : AppColors.surfaceHigh,
+              borderRadius: AppRadii.buttonRadius,
+              border: Border.all(
+                color: highlight ? AppColors.primary : AppColors.outline,
+                width: highlight ? 1.5 : 1,
+              ),
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              '$value',
+              style: theme.textTheme.displaySmall?.copyWith(
+                color: highlight
+                    ? AppColors.onPrimaryContainer
+                    : AppColors.onSurface,
+                fontWeight: FontWeight.w900,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _StepBtn(icon: Icons.remove, enabled: value > 0, onTap: _dec),
+            const SizedBox(width: 14),
+            _StepBtn(icon: Icons.add, enabled: value < 20, onTap: _inc),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// _StepBtn
+// ---------------------------------------------------------------------------
+
+class _StepBtn extends StatelessWidget {
+  const _StepBtn({
+    required this.icon,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: enabled ? onTap : null,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 120),
+        width: 36,
+        height: 36,
+        decoration: BoxDecoration(
+          color: AppColors.surfaceHigh,
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: enabled ? AppColors.outlineVariant : AppColors.outline,
+          ),
+        ),
+        child: Icon(
+          icon,
+          size: 16,
+          color: enabled ? AppColors.onSurface : AppColors.onSurfaceMuted,
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// _PlayerChip
+// ---------------------------------------------------------------------------
+
+class _PlayerChip extends StatelessWidget {
+  const _PlayerChip({
+    required this.player,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final PlayerModel player;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color:
+              selected ? AppColors.primaryContainer : AppColors.surfaceHigh,
+          borderRadius: AppRadii.pillRadius,
+          border: Border.all(
+            color: selected ? AppColors.primary : AppColors.outline,
+            width: selected ? 1.5 : 1,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _PositionBadge(position: player.position),
+            const SizedBox(width: 6),
+            Text(
+              player.name,
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: selected
+                    ? AppColors.onPrimaryContainer
+                    : AppColors.onSurface,
+                fontWeight:
+                    selected ? FontWeight.w700 : FontWeight.w500,
+              ),
+            ),
+            if (player.jerseyNumber != null) ...[
+              const SizedBox(width: 4),
+              Text(
+                '#${player.jerseyNumber}',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: selected
+                      ? AppColors.onPrimaryContainer
+                          .withValues(alpha: 0.7)
+                      : AppColors.onSurfaceMuted,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 }
 
@@ -1041,6 +1697,10 @@ class _PlayerRow extends StatelessWidget {
   }
 }
 
+// ---------------------------------------------------------------------------
+// _PositionBadge — used by _PlayerRow (Teams tab) and _PlayerChip (Predict tab)
+// ---------------------------------------------------------------------------
+
 class _PositionBadge extends StatelessWidget {
   const _PositionBadge({required this.position});
   final String? position;
@@ -1048,7 +1708,36 @@ class _PositionBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final pos = (position ?? '').toUpperCase();
+    final raw = (position ?? '').toUpperCase();
+    final pos = switch (raw) {
+      final s when s.startsWith('GK') => 'GK',
+      final s when s == 'DEF' ||
+              s == 'DF' ||
+              s == 'CB' ||
+              s == 'LB' ||
+              s == 'RB' ||
+              s == 'LWB' ||
+              s == 'RWB' =>
+        'DEF',
+      final s when s == 'MID' ||
+              s == 'MF' ||
+              s == 'CM' ||
+              s == 'DM' ||
+              s == 'AM' ||
+              s == 'LM' ||
+              s == 'RM' =>
+        'MID',
+      final s when s == 'FWD' ||
+              s == 'FW' ||
+              s == 'ST' ||
+              s == 'LW' ||
+              s == 'RW' ||
+              s == 'CF' ||
+              s == 'SS' =>
+        'FWD',
+      _ => raw.isEmpty ? '?' : raw,
+    };
+
     final color = AppColors.forPosition(pos);
 
     return Container(
@@ -1059,7 +1748,7 @@ class _PositionBadge extends StatelessWidget {
         border: Border.all(color: color.withValues(alpha: 0.4)),
       ),
       child: Text(
-        pos.isEmpty ? '?' : pos,
+        pos,
         style: theme.textTheme.labelSmall?.copyWith(
           color: color,
           fontWeight: FontWeight.w700,
