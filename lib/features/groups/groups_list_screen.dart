@@ -33,10 +33,16 @@ class GroupsListScreen extends ConsumerWidget {
   }
 }
 
-void _showGroupActions(BuildContext context, WidgetRef ref) {
+void _showGroupActions(BuildContext parentContext, WidgetRef ref) {
+  // The action sheet itself is a modal — opening another modal from
+  // inside its ListTile onTap fires AFTER Navigator.pop(sheetContext),
+  // which deactivates the sheet's BuildContext. Using that stale
+  // context for `showModalBottomSheet` produces a "black screen" sheet
+  // (no theme / MediaQuery inheritance). Capture the screen's context
+  // here and pass it to the nested sheet instead.
   showAppSheet<void>(
-    context: context,
-    builder: (_) => AppSheetBody(
+    context: parentContext,
+    builder: (sheetContext) => AppSheetBody(
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -44,16 +50,16 @@ void _showGroupActions(BuildContext context, WidgetRef ref) {
             leading: Icon(Symbols.group_add, color: AppColors.primary),
             title: const Text('Create new group'),
             onTap: () {
-              Navigator.pop(context);
-              showCreateGroupSheet(context, ref);
+              Navigator.pop(sheetContext);
+              showCreateGroupSheet(parentContext, ref);
             },
           ),
           ListTile(
             leading: Icon(Symbols.login, color: AppColors.tertiary),
             title: const Text('Join with invite code'),
             onTap: () {
-              Navigator.pop(context);
-              showJoinGroupSheet(context, ref);
+              Navigator.pop(sheetContext);
+              showJoinGroupSheet(parentContext, ref);
             },
           ),
         ],

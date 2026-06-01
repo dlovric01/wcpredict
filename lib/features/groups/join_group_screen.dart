@@ -44,18 +44,16 @@ class _JoinGroupSheetState extends ConsumerState<_JoinGroupSheet> {
       _error = null;
     });
     try {
-      final group = await supabase
-          .from('groups')
-          .select()
-          .eq('invite_code', code)
-          .maybeSingle();
-      if (group == null) {
+      final result = await supabase
+          .rpc('find_group_by_invite', params: {'p_code': code}) as List;
+      if (result.isEmpty) {
         setState(() {
           _submitting = false;
           _error = 'Group not found';
         });
         return;
       }
+      final group = result.first as Map<String, dynamic>;
       final user = supabase.auth.currentUser!;
       await supabase.from('group_members').upsert(
         {'group_id': group['id'], 'user_id': user.id},

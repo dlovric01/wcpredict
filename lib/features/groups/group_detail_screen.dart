@@ -36,8 +36,15 @@ class GroupDetailScreen extends ConsumerWidget {
               orElse: () => null,
             );
         if (group == null) {
-          return const Scaffold(
-            body: Center(child: Text('Group not found.')),
+          return Scaffold(
+            appBar: AppBar(
+              leading: IconButton(
+                icon: const Icon(Icons.arrow_back),
+                onPressed: () => context.go('/groups'),
+              ),
+              title: const Text('Group'),
+            ),
+            body: const Center(child: Text('Group not found.')),
           );
         }
         return _GroupDetailBody(group: group);
@@ -525,7 +532,13 @@ class _OwnerSettingsSheetState extends ConsumerState<_OwnerSettingsSheet> {
           .eq('group_id', widget.group.id);
       await supabase.from('groups').delete().eq('id', widget.group.id);
       ref.invalidate(myGroupsProvider);
-      if (mounted) Navigator.pop(context);
+      if (!mounted) return;
+      // Capture references BEFORE popping the modal — the sheet's
+      // BuildContext is deactivated by Navigator.pop, after which
+      // context.go would no-op against a defunct element.
+      final router = GoRouter.of(context);
+      Navigator.pop(context);
+      router.go('/groups');
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
