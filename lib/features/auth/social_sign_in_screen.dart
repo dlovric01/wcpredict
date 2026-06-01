@@ -1,15 +1,17 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart' hide IconAlignment;
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:sign_in_with_apple/sign_in_with_apple.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show AuthException;
 import 'package:wcpredict/core/auth_repository.dart';
 import 'package:wcpredict/core/logger.dart';
+import 'package:wcpredict/core/supabase_client.dart';
 import 'package:wcpredict/core/theme/app_colors.dart';
 import 'package:wcpredict/core/theme/app_radii.dart';
 import 'package:wcpredict/core/theme/app_spacing.dart';
 import 'package:wcpredict/shared/widgets/app_logo.dart';
-
 class SocialSignInScreen extends StatefulWidget {
   const SocialSignInScreen({super.key});
 
@@ -43,6 +45,47 @@ class _SocialSignInScreenState extends State<SocialSignInScreen> {
       // Router redirect listens to auth state and sends us to /matches.
     } catch (e, st) {
       talker.handle(e, st, 'Google Sign-In failed');
+      _showError(e);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  /// Debug-only quick login that signs in with the regression-suite
+  /// test credentials. Signs up on first use (the project allows
+  /// anonymous signup with email confirmation off), then signs in.
+  ///
+  /// Only wired up when `kDebugMode` is true — release builds never
+  /// see this code path.
+  Future<void> _devQuickLogin(String name) async {
+    if (_loading) return;
+    setState(() => _loading = true);
+    final email = '$name@wctest.invalid';
+    const password = 'TestPass99!';
+    try {
+      try {
+        await supabase.auth
+            .signInWithPassword(email: email, password: password);
+      } on AuthException catch (e) {
+        // Invalid login → create the account first, then sign in. The
+        // project has signup enabled with email confirmations off so
+        // the new session lands immediately.
+        if (e.statusCode == '400' || e.statusCode == '401') {
+          await supabase.auth.signUp(
+            email: email,
+            password: password,
+            data: {'display_name': name},
+          );
+          if (supabase.auth.currentSession == null) {
+            await supabase.auth
+                .signInWithPassword(email: email, password: password);
+          }
+        } else {
+          rethrow;
+        }
+      }
+    } catch (e, st) {
+      talker.handle(e, st, 'Dev login failed');
       _showError(e);
     } finally {
       if (mounted) setState(() => _loading = false);
@@ -137,6 +180,65 @@ class _SocialSignInScreenState extends State<SocialSignInScreen> {
                     width: 20,
                     height: 20,
                     child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                ),
+              ],
+              if (kDebugMode) ...[
+                const SizedBox(height: AppSpacing.xl),
+                Container(
+                  padding: const EdgeInsets.all(AppSpacing.md),
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceHigh,
+                    borderRadius: AppRadii.cardRadius,
+                    border: Border.all(
+                      color: AppColors.secondary.withValues(alpha: 0.4),
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'DEV QUICK LOGIN',
+                        textAlign: TextAlign.center,
+                        style: tt.labelSmall?.copyWith(
+                          color: AppColors.secondary,
+                          letterSpacing: 1.2,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      const SizedBox(height: AppSpacing.sm),
+                      Row(
+                        children: [
+                          for (final name in const ['alice', 'bob', 'charlie'])
+                            Expanded(
+                              child: Padding(
+                                padding: EdgeInsets.symmetric(
+                                  horizontal: name == 'bob' ? 4 : 0,
+                                ),
+                                child: OutlinedButton(
+                                  onPressed: _loading
+                                      ? null
+                                      : () => _devQuickLogin(name),
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: AppColors.secondary,
+                                    side: BorderSide(
+                                      color: AppColors.secondary
+                                          .withValues(alpha: 0.5),
+                                    ),
+                                    padding: const EdgeInsets.symmetric(
+                                        vertical: 10),
+                                  ),
+                                  child: Text(
+                                    name[0].toUpperCase() + name.substring(1),
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.w700),
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ],
                   ),
                 ),
               ],

@@ -18,15 +18,13 @@ import 'package:wcpredict/core/models/match_model.dart';
 /// A match is locked when either:
 ///   * The (cached) [match] is already locked — kickoff passed, status
 ///     advanced past `scheduled`, or status is `cancelled`.
-///   * A live-streamed snapshot ([liveOverride]) reports a non-scheduled
+///   * The live-streamed overlay row ([liveOverlay]) reports a non-scheduled
 ///     status. This handles the mid-session race where Realtime delivers
 ///     `status='live'` before the next match query refresh.
-bool predictTabLocked(MatchModel match, Map<String, dynamic>? liveOverride) {
+bool predictTabLocked(MatchModel match, MatchModel? liveOverlay) {
   if (match.isLocked) return true;
-  final liveStatus = liveOverride?['status'] as String?;
-  return liveStatus == 'live' ||
-      liveStatus == 'final' ||
-      liveStatus == 'cancelled';
+  final s = liveOverlay?.status;
+  return s == 'live' || s == 'final' || s == 'cancelled';
 }
 
 /// Result of [sanitisePredictionPicks]. The score fields are pass-through;

@@ -36,8 +36,15 @@ class GoRouterRefreshStream extends ChangeNotifier {
 
 // _publicRoutes + redirect logic live in router_redirect.dart for testability.
 
+/// Optional debug-only initial route override. Pass at build time:
+///   --dart-define=DEV_INITIAL_ROUTE=/matches/999001
+/// When set, the router lands here on cold start instead of `/matches`.
+/// Combine with `DEV_AUTOLOGIN_USER` to drive the simulator into any
+/// screen without tapping. Empty (default) → normal behaviour.
+const _kDevInitialRoute = String.fromEnvironment('DEV_INITIAL_ROUTE');
+
 final appRouter = GoRouter(
-  initialLocation: '/matches',
+  initialLocation: _kDevInitialRoute.isEmpty ? '/matches' : _kDevInitialRoute,
   observers: [AppRouteObserver()],
   refreshListenable: GoRouterRefreshStream(
     supabase.auth.onAuthStateChange,

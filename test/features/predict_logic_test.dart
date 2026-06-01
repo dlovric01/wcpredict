@@ -50,32 +50,29 @@ void main() {
       // The cached MatchModel still says scheduled (DB poll hasn't run yet)
       // but Realtime delivered the kickoff status flip — UI must lock.
       final cached = makeMatch(status: 'scheduled', kickoffTime: far);
-      expect(predictTabLocked(cached, {'status': 'live'}), isTrue);
+      expect(predictTabLocked(cached, makeMatch(status: 'live')), isTrue);
     });
 
     test('Realtime override status=final locks', () {
       final cached = makeMatch(status: 'scheduled', kickoffTime: far);
-      expect(predictTabLocked(cached, {'status': 'final'}), isTrue);
+      expect(predictTabLocked(cached, makeMatch(status: 'final')), isTrue);
     });
 
     test('Realtime override status=cancelled locks', () {
       final cached = makeMatch(status: 'scheduled', kickoffTime: far);
-      expect(predictTabLocked(cached, {'status': 'cancelled'}), isTrue);
+      expect(
+          predictTabLocked(cached, makeMatch(status: 'cancelled')), isTrue);
     });
 
     test('Realtime override status=scheduled does NOT lock', () {
       final cached = makeMatch(status: 'scheduled', kickoffTime: far);
-      expect(predictTabLocked(cached, {'status': 'scheduled'}), isFalse);
+      expect(
+          predictTabLocked(cached, makeMatch(status: 'scheduled')), isFalse);
     });
 
-    test('Realtime override with no status field → unlocked (no signal)', () {
+    test('Realtime override with null status does not lock', () {
       final cached = makeMatch(status: 'scheduled', kickoffTime: far);
-      expect(predictTabLocked(cached, {'foo': 'bar'}), isFalse);
-    });
-
-    test('Realtime override empty map → unlocked', () {
-      final cached = makeMatch(status: 'scheduled', kickoffTime: far);
-      expect(predictTabLocked(cached, <String, dynamic>{}), isFalse);
+      expect(predictTabLocked(cached, makeMatch()), isFalse);
     });
   });
 

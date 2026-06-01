@@ -16,6 +16,8 @@ import 'package:wcpredict/features/matches/predict_logic.dart';
 import 'package:wcpredict/features/matches/first_team_picker.dart';
 import 'package:wcpredict/features/matches/live_events_widget.dart';
 import 'package:wcpredict/shared/providers/match_detail_provider.dart';
+import 'package:wcpredict/shared/providers/matches_provider.dart';
+import 'package:wcpredict/shared/utils/live_minute.dart';
 import 'package:wcpredict/shared/providers/predictions_provider.dart';
 import 'package:wcpredict/shared/widgets/team_flag.dart';
 import 'package:wcpredict/shared/widgets/verdict_pill.dart';
@@ -102,12 +104,11 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen>
           return Column(
             children: [
               // ── Hero card — always visible above tabs ──────────────────
-              _HeroScoreCard(
-                match: match,
-                liveOverride: ref
-                    .watch(matchLiveStateProvider(widget.matchId))
-                    .valueOrNull,
-              ),
+              // The hero is its own ConsumerWidget; only the score region
+              // (and the live-minute pill inside it) rebuilds on score /
+              // status / minute ticks. Team sides + the surrounding
+              // Scaffold stay static.
+              _HeroScoreCard(match: match, matchId: widget.matchId),
               // ── Tab bar ────────────────────────────────────────────────
               TabBar(
                 controller: _tabController,
@@ -143,9 +144,6 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen>
                       matchId: widget.matchId,
                       existing: predAsync.valueOrNull,
                       onSaved: () => _tabController.animateTo(0),
-                      liveOverride: ref
-                          .watch(matchLiveStateProvider(widget.matchId))
-                          .valueOrNull,
                     ),
                     _TeamsTab(match: match),
                   ],
@@ -164,35 +162,17 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen>
 // ---------------------------------------------------------------------------
 
 class _HeroScoreCard extends StatelessWidget {
-  const _HeroScoreCard({required this.match, this.liveOverride});
+  const _HeroScoreCard({required this.match, required this.matchId});
+
+  /// Baseline match (cached + teams joined). Status / scores are
+  /// served fresh per-frame by [_LiveCenterColumn] reading the live
+  /// overlay; the team sides we pass to [_TeamSide] never change once
+  /// the cache loads, so those siblings stay out of the rebuild scope.
   final MatchModel match;
-  final Map<String, dynamic>? liveOverride;
+  final int matchId;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    // Merge realtime row over the cached match so status / scores
-    // flip without refetching the whole join.
-    final status = (liveOverride?['status'] as String?) ?? match.status;
-    final ftA = (liveOverride?['score_ft_team1'] as num?)?.toInt() ?? match.scoreFtTeam1;
-    final ftB = (liveOverride?['score_ft_team2'] as num?)?.toInt() ?? match.scoreFtTeam2;
-    final htA = (liveOverride?['score_ht_team1'] as num?)?.toInt() ?? match.scoreHtTeam1;
-    final htB = (liveOverride?['score_ht_team2'] as num?)?.toInt() ?? match.scoreHtTeam2;
-    final etA = (liveOverride?['score_et_team1'] as num?)?.toInt() ?? match.scoreEtTeam1;
-    final etB = (liveOverride?['score_et_team2'] as num?)?.toInt() ?? match.scoreEtTeam2;
-    final penA = (liveOverride?['score_pen_team1'] as num?)?.toInt() ?? match.scorePenTeam1;
-    final penB = (liveOverride?['score_pen_team2'] as num?)?.toInt() ?? match.scorePenTeam2;
-
-    final isLive = status == 'live';
-    final isFinal = status == 'final';
-    // Reveal HT once both halves are populated, regardless of status.
-    final hasHt = htA != null && htB != null;
-    final hasEt = etA != null && etB != null;
-    final hasPen = penA != null && penB != null;
-    // During play we deliberately suppress the running score; the only
-    // score that may appear before FT is the half-time number.
-    final showFinalScore = isFinal;
-
     return Container(
       decoration: const BoxDecoration(
         gradient: LinearGradient(
@@ -209,83 +189,118 @@ class _HeroScoreCard extends StatelessWidget {
             Expanded(child: _TeamSide(team: match.team1, rightAlign: false)),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (isLive || isFinal) ...[
-                    _StatusChip(status: status),
-                    const SizedBox(height: 8),
-                  ],
-                  if (showFinalScore)
-                    Text(
-                      '${ftA ?? 0}–${ftB ?? 0}',
-                      style: theme.textTheme.displayMedium?.copyWith(
-                        color: AppColors.onSurface,
-                        fontFeatures: const [FontFeature.tabularFigures()],
-                        fontWeight: FontWeight.w700,
-                      ),
-                    )
-                  else if (isLive && hasHt)
-                    // Half-time score during the break / second half.
-                    Text(
-                      'HT $htA–$htB',
-                      style: theme.textTheme.titleLarge?.copyWith(
-                        color: AppColors.onSurface,
-                        fontFeatures: const [FontFeature.tabularFigures()],
-                        fontWeight: FontWeight.w800,
-                      ),
-                    )
-                  else if (!isLive && !isFinal)
-                    Text(
-                      match.kickoffTime != null
-                          ? DateFormat('d MMM\nHH:mm')
-                              .format(match.kickoffTime!.toLocal())
-                          : 'TBC',
-                      style: theme.textTheme.titleMedium?.copyWith(
-                        color: AppColors.onSurface,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  // Sub-labels visible after FT:
-                  //   HT 0-1            — half-time score
-                  //   ET 2-2            — score after extra time, if played
-                  //   PEN 5-4           — penalty shootout result, if played
-                  if (showFinalScore && hasHt) ...[
-                    const SizedBox(height: 2),
-                    Text(
-                      'HT $htA–$htB',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: AppColors.onSurfaceMuted,
-                      ),
-                    ),
-                  ],
-                  if (showFinalScore && hasEt) ...[
-                    const SizedBox(height: 2),
-                    Text(
-                      'ET $etA–$etB',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: AppColors.secondary,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                  if (showFinalScore && hasPen) ...[
-                    const SizedBox(height: 2),
-                    Text(
-                      'PEN $penA–$penB',
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: AppColors.secondary,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
+              child: _LiveCenterColumn(match: match, matchId: matchId),
             ),
             Expanded(child: _TeamSide(team: match.team2, rightAlign: true)),
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Centre column of the hero card — status chip, live score, sub-labels.
+///
+/// Watches [liveMatchProvider] so a Realtime score / status update only
+/// rebuilds this subtree. The pulsing LIVE dot and the live minute pill
+/// are isolated further inside `_LiveChip` so their animation and 10-s
+/// ticker don't drag the score Text along with them.
+class _LiveCenterColumn extends ConsumerWidget {
+  const _LiveCenterColumn({required this.match, required this.matchId});
+  final MatchModel match;
+  final int matchId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final overlay = ref.watch(liveMatchProvider(matchId));
+    final m = mergeWithLive(match, overlay);
+
+    final status = m.status;
+    final isLive = status == 'live';
+    final isFinal = status == 'final';
+    final hasHt = m.scoreHtTeam1 != null && m.scoreHtTeam2 != null;
+    final hasEt = m.scoreEtTeam1 != null && m.scoreEtTeam2 != null;
+    final hasPen = m.scorePenTeam1 != null && m.scorePenTeam2 != null;
+
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (isLive || isFinal) ...[
+          _StatusChip(match: m),
+          const SizedBox(height: 8),
+        ],
+        if (isFinal)
+          Text(
+            '${m.scoreFtTeam1 ?? 0}–${m.scoreFtTeam2 ?? 0}',
+            style: theme.textTheme.displayMedium?.copyWith(
+              color: AppColors.onSurface,
+              fontFeatures: const [FontFeature.tabularFigures()],
+              fontWeight: FontWeight.w700,
+            ),
+          )
+        else if (isLive)
+          // During play we show the running score. The minute pill is
+          // rendered inside the LIVE chip above; the HT score is folded
+          // into a sub-row once both halves are populated.
+          Text(
+            '${m.scoreFtTeam1 ?? 0}–${m.scoreFtTeam2 ?? 0}',
+            style: theme.textTheme.displayMedium?.copyWith(
+              color: AppColors.onSurface,
+              fontFeatures: const [FontFeature.tabularFigures()],
+              fontWeight: FontWeight.w700,
+            ),
+          )
+        else
+          Text(
+            m.kickoffTime != null
+                ? DateFormat('d MMM\nHH:mm').format(m.kickoffTime!.toLocal())
+                : 'TBC',
+            style: theme.textTheme.titleMedium?.copyWith(
+              color: AppColors.onSurface,
+            ),
+            textAlign: TextAlign.center,
+          ),
+        // Sub-labels — half-time once available, then ET / PEN after FT.
+        if (isLive && hasHt) ...[
+          const SizedBox(height: 2),
+          Text(
+            'HT ${m.scoreHtTeam1}–${m.scoreHtTeam2}',
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: AppColors.onSurfaceMuted,
+            ),
+          ),
+        ],
+        if (isFinal && hasHt) ...[
+          const SizedBox(height: 2),
+          Text(
+            'HT ${m.scoreHtTeam1}–${m.scoreHtTeam2}',
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: AppColors.onSurfaceMuted,
+            ),
+          ),
+        ],
+        if (isFinal && hasEt) ...[
+          const SizedBox(height: 2),
+          Text(
+            'ET ${m.scoreEtTeam1}–${m.scoreEtTeam2}',
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: AppColors.secondary,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+        if (isFinal && hasPen) ...[
+          const SizedBox(height: 2),
+          Text(
+            'PEN ${m.scorePenTeam1}–${m.scorePenTeam2}',
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: AppColors.secondary,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ],
     );
   }
 }
@@ -331,15 +346,15 @@ class _TeamSide extends StatelessWidget {
 }
 
 class _StatusChip extends StatelessWidget {
-  const _StatusChip({required this.status});
-  final String? status;
+  const _StatusChip({required this.match});
+  final MatchModel match;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return switch (status) {
-      'live' => _LiveChip(),
+    return switch (match.status) {
+      'live' => _LiveChip(match: match),
       'final' => Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           decoration: BoxDecoration(
@@ -362,7 +377,16 @@ class _StatusChip extends StatelessWidget {
   }
 }
 
+/// LIVE pill — pulsing dot + label + live minute pill.
+///
+/// The pulse [AnimationController] only repaints the FadeTransition
+/// subtree; the minute pill is an isolated [_LiveMinutePill] that
+/// watches the global clock ticker so the surrounding chip's layout
+/// never rebuilds on its account.
 class _LiveChip extends StatefulWidget {
+  const _LiveChip({required this.match});
+  final MatchModel match;
+
   @override
   State<_LiveChip> createState() => _LiveChipState();
 }
@@ -421,7 +445,44 @@ class _LiveChipState extends State<_LiveChip>
               letterSpacing: 0.5,
             ),
           ),
+          // Live-minute pill, separated by a dot. Subscribes to its
+          // own clock ticker so the chip surrounding it is never
+          // included in the 10-second rebuild scope.
+          _LiveMinutePill(match: widget.match),
         ],
+      ),
+    );
+  }
+}
+
+/// Live minute label ("4'", "HT", "90+2'", …). Watches the global
+/// 10-second clock ticker so updates rebuild only this Text and
+/// nothing above it. Returns an empty SizedBox when the match isn't
+/// live or kickoff hasn't been reached.
+class _LiveMinutePill extends ConsumerWidget {
+  const _LiveMinutePill({required this.match});
+  final MatchModel match;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Watching the ticker without `.select` is fine: the value (DateTime)
+    // changes on every tick, which is the whole point — we want a
+    // rebuild every 10 s. Riverpod still confines the rebuild to this
+    // ConsumerWidget's subtree.
+    final now = ref.watch(clockTickerProvider).valueOrNull ?? DateTime.now();
+    final label = formatLiveMinute(match, now);
+    if (label == null) return const SizedBox.shrink();
+
+    final theme = Theme.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(left: 6),
+      child: Text(
+        label,
+        style: theme.textTheme.labelSmall?.copyWith(
+          color: AppColors.live,
+          fontWeight: FontWeight.w800,
+          fontFeatures: const [FontFeature.tabularFigures()],
+        ),
       ),
     );
   }
@@ -446,7 +507,16 @@ class _OverviewTab extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final isFinal = match.status == 'final';
+    // Subscribe only to the overlay's status so a score update during
+    // play doesn't rebuild the tab. The hero card carries the live
+    // score; here we only care which sections are visible.
+    final overlayStatus = ref.watch(
+      liveMatchProvider(matchId).select((m) => m?.status),
+    );
+    final status = overlayStatus ?? match.status;
+    final isFinal = status == 'final';
+    final isLive = status == 'live';
+    final showEvents = isLive || isFinal;
 
     return RefreshIndicator(
       color: AppColors.primary,
@@ -458,31 +528,38 @@ class _OverviewTab extends ConsumerWidget {
       },
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-        // Events only reveal after FT. During play we keep the surface
-        // calm — the prediction summary stays put and there's no event
-        // ticker to chase.
-        children: isFinal
-            ? [
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: Text(
-                    'Match Events',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                          color: AppColors.onSurface,
-                        ),
-                  ),
-                ),
-                LiveEventsWidget(matchId: matchId),
-              ]
-            : [
-                _MatchInfoCard(match: match),
-                const SizedBox(height: 12),
-                _PredictionSummaryCard(
-                  match: match,
-                  prediction: prediction,
-                  onPredictTap: onPredictTap,
-                ),
-              ],
+        children: [
+          if (!showEvents) ...[
+            _MatchInfoCard(match: match),
+            const SizedBox(height: 12),
+            _PredictionSummaryCard(
+              match: match,
+              prediction: prediction,
+              onPredictTap: onPredictTap,
+            ),
+          ] else ...[
+            // Prediction summary stays pinned above the timeline so the
+            // user can keep eyeing their own picks while goals roll in.
+            // Once the match is final the card shows the earned points;
+            // during play it's the read-only picks view.
+            _PredictionSummaryCard(
+              match: match,
+              prediction: prediction,
+              onPredictTap: onPredictTap,
+            ),
+            const SizedBox(height: 16),
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Text(
+                isFinal ? 'Match Events' : 'Live Events',
+                style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      color: AppColors.onSurface,
+                    ),
+              ),
+            ),
+            LiveEventsWidget(matchId: matchId),
+          ],
+        ],
       ),
     );
   }
@@ -688,16 +765,11 @@ class _PredictTab extends ConsumerStatefulWidget {
     required this.matchId,
     required this.existing,
     required this.onSaved,
-    this.liveOverride,
   });
   final MatchModel match;
   final int matchId;
   final PredictionModel? existing;
   final VoidCallback onSaved;
-
-  /// Live-streamed row from matchLiveStateProvider — may carry a fresher
-  /// status than the cached MatchModel when the match kicks off mid-session.
-  final Map<String, dynamic>? liveOverride;
 
   @override
   ConsumerState<_PredictTab> createState() => _PredictTabState();
@@ -713,8 +785,14 @@ class _PredictTabState extends ConsumerState<_PredictTab> {
   bool get _isZeroZero => _score1 == 0 && _score2 == 0;
 
   /// True when predictions must be locked. Delegated to the pure helper
-  /// so it's unit-testable independently of the widget tree.
-  bool get _locked => predictTabLocked(widget.match, widget.liveOverride);
+  /// so it's unit-testable independently of the widget tree. The live
+  /// overlay is read off the provider so a Realtime `status='live'`
+  /// flip locks the form immediately, without waiting for the next
+  /// match-by-id re-fetch.
+  bool get _locked => predictTabLocked(
+        widget.match,
+        ref.read(liveMatchProvider(widget.matchId)),
+      );
 
   @override
   void initState() {
@@ -815,9 +893,19 @@ class _PredictTabState extends ConsumerState<_PredictTab> {
     final theme = Theme.of(context);
     final t1 = widget.match.team1;
     final t2 = widget.match.team2;
+    // Subscribe to the overlay's status so a kickoff during this build
+    // session re-evaluates `_locked` and the predict UI flips to the
+    // closed state without the user navigating away.
+    final overlayStatus = ref.watch(
+      liveMatchProvider(widget.matchId).select((m) => m?.status),
+    );
+    final locked = widget.match.isLocked ||
+        overlayStatus == 'live' ||
+        overlayStatus == 'final' ||
+        overlayStatus == 'cancelled';
 
     // ── Locked state ─────────────────────────────────────────────────────
-    if (_locked) {
+    if (locked) {
       final pred = widget.existing;
       final isFinal = widget.match.status == 'final';
 
