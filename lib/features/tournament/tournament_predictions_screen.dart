@@ -127,16 +127,23 @@ class _TournamentPredictionsScreenState
               ),
               const SizedBox(height: AppSpacing.lg),
               if (!locked)
-                FilledButton(
-                  onPressed: _saving ? null : _save,
-                  child: _saving
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Text('Save picks'),
-                ),
+                Builder(builder: (_) {
+                  // Save is a no-op when neither pick is set — disable
+                  // the button so the user can't fire an empty upsert
+                  // that just clobbers an existing row with NULLs.
+                  final hasPick = _winnerTeamId != null ||
+                      _goldenBootPlayerId != null;
+                  return FilledButton(
+                    onPressed: (_saving || !hasPick) ? null : _save,
+                    child: _saving
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Text('Save picks'),
+                  );
+                }),
             ],
           );
         },
