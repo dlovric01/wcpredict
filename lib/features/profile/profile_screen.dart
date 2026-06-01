@@ -1,10 +1,16 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show SignOutScope;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-
+import 'package:talker_flutter/talker_flutter.dart';
+import 'package:wcpredict/core/logger.dart';
 import 'package:wcpredict/core/models/prediction_model.dart';
 import 'package:wcpredict/core/supabase_client.dart';
+import 'package:wcpredict/core/theme/app_colors.dart';
+import 'package:wcpredict/core/theme/app_radii.dart';
+import 'package:wcpredict/shared/providers/groups_provider.dart';
 import 'package:wcpredict/shared/providers/auth_provider.dart';
+import 'package:wcpredict/shared/widgets/app_sheet.dart';
 
 // ---------------------------------------------------------------------------
 // Providers
@@ -12,27 +18,25 @@ import 'package:wcpredict/shared/providers/auth_provider.dart';
 
 /// Fetches the current user's profile row.
 final _myProfileProvider = FutureProvider<Map<String, dynamic>?>((ref) async {
-  final user = supabase.auth.currentUser;
-  if (user == null) return null;
+  final userId = ref.watch(currentUserIdProvider);
+  if (userId == null) return null;
   final data = await supabase
       .from('profiles')
       .select()
-      .eq('user_id', user.id)
+      .eq('user_id', userId)
       .maybeSingle();
   return data;
 });
 
 /// Aggregates prediction stats for the current user.
 final _myStatsProvider = FutureProvider<_PredictionStats>((ref) async {
-  final user = supabase.auth.currentUser;
-  if (user == null) return const _PredictionStats();
+  final userId = ref.watch(currentUserIdProvider);
+  if (userId == null) return const _PredictionStats();
 
-  final data = await supabase
-      .from('predictions')
-      .select()
-      .eq('user_id', user.id);
-
-  final preds = (data as List)
+  final preds = (await supabase
+          .from('predictions')
+          .select()
+          .eq('user_id', userId) as List)
       .map((e) => PredictionModel.fromJson(e as Map<String, dynamic>))
       .toList();
 
@@ -41,27 +45,27 @@ final _myStatsProvider = FutureProvider<_PredictionStats>((ref) async {
     (sum, p) => sum + (p.pointsEarned ?? 0),
   );
 
-  final exactCount = preds.where((p) {
-    final scorePoints = p.pointsScore ?? 0;
-    // 'Exact score' — awarded max score-related points
-    // Heuristic: pointsScore == 3 (common exact-score award)
-    return scorePoints >= 3;
-  }).length;
-
-  final correctResultCount = preds.where((p) {
-    return (p.pointsScore ?? 0) > 0;
-  }).length;
+  final exactCount = preds.where((p) => p.isExact).length;
+  final goalDiffCount = preds.where((p) => p.isGoalDiff).length;
+  final outcomeCount = preds.where((p) => p.isOutcome).length;
+  final firstTeamHits = preds.where((p) => p.firstTeamHit).length;
+  final goalscorerHits = preds.where((p) => p.goalscorerHit).length;
 
   return _PredictionStats(
     totalPoints: totalPoints,
     exactCount: exactCount,
-    correctResultCount: correctResultCount,
+    outcomeCount: outcomeCount,
+    goalDiffCount: goalDiffCount,
+    firstTeamHits: firstTeamHits,
+    goalscorerHits: goalscorerHits,
+    predictionCount: preds.length,
   );
 });
 
 // ---------------------------------------------------------------------------
 // Screen
 // ---------------------------------------------------------------------------
+
 class ProfileScreen extends ConsumerWidget {
   const ProfileScreen({super.key});
 
@@ -69,6 +73,7 @@ class ProfileScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final profileAsync = ref.watch(_myProfileProvider);
     final statsAsync = ref.watch(_myStatsProvider);
+    final groupsAsync = ref.watch(myGroupsProvider);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Profile')),
@@ -76,109 +81,303 @@ class ProfileScreen extends ConsumerWidget {
         onRefresh: () async {
           ref.invalidate(_myProfileProvider);
           ref.invalidate(_myStatsProvider);
+          ref.invalidate(myGroupsProvider);
         },
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
-            // ── Avatar + name ──────────────────────────────────────────
-            profileAsync.when(
-              loading: () =>
-                  const Center(child: CircularProgressIndicator()),
-              error: (e, _) => Text('Error loading profile: $e'),
-              data: (profile) => _ProfileHeader(profile: profile),
+            // ── Header card ───────────────────────────────────────────────
+            Card(
+              color: AppColors.surfaceHigh,
+              shape: RoundedRectangleBorder(
+                borderRadius: AppRadii.cardRadius,
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: profileAsync.when(
+                  loading: () =>
+                      const Center(child: CircularProgressIndicator()),
+                  error: (e, _) => Text('Error loading profile: $e'),
+                  data: (profile) => _ProfileHeader(profile: profile),
+                ),
+              ),
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 16),
 
-            // ── Stats ──────────────────────────────────────────────────
+            // ── Stats card ────────────────────────────────────────────────
             statsAsync.when(
               loading: () => const LinearProgressIndicator(),
               error: (e, _) => Text('Error loading stats: $e'),
               data: (stats) => _StatsSection(stats: stats),
             ),
+            const SizedBox(height: 16),
+
+            // ── Tournament picks ──────────────────────────────────────────
+            Card(
+              shape: RoundedRectangleBorder(borderRadius: AppRadii.cardRadius),
+              child: ListTile(
+                leading: const Icon(Icons.emoji_events_outlined,
+                    color: AppColors.secondary),
+                title: const Text('Tournament picks'),
+                subtitle: const Text('World Cup Winner +75 · Golden Boot +50'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => context.push('/tournament'),
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // ── Groups section ────────────────────────────────────────────
+            groupsAsync.maybeWhen(
+              data: (groups) => groups.isEmpty
+                  ? const SizedBox.shrink()
+                  : Card(
+                      shape: RoundedRectangleBorder(
+                        borderRadius: AppRadii.cardRadius,
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+                            child: Text(
+                              'My Groups',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                          ),
+                          for (final g in groups)
+                            ListTile(
+                              title: Text(g.name),
+                              trailing: const Icon(Icons.chevron_right),
+                              onTap: () => context.push('/groups/${g.id}'),
+                            ),
+                        ],
+                      ),
+                    ),
+              orElse: () => const SizedBox.shrink(),
+            ),
+            const SizedBox(height: 16),
+
+            // ── Settings section ──────────────────────────────────────────
+            Card(
+              shape: RoundedRectangleBorder(
+                borderRadius: AppRadii.cardRadius,
+              ),
+              child: Column(
+                children: [
+                  profileAsync.maybeWhen(
+                    data: (profile) => ListTile(
+                      leading: const Icon(Icons.edit_outlined),
+                      title: const Text('Edit display name'),
+                      onTap: () => _EditNameDialog.show(context, profile),
+                    ),
+                    orElse: () => const SizedBox.shrink(),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.palette_outlined),
+                    title: const Text('Theme'),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'Dark mode',
+                          style:
+                              Theme.of(context).textTheme.labelMedium?.copyWith(
+                                    color: AppColors.onSurfaceVariant,
+                                  ),
+                        ),
+                        const SizedBox(width: 4),
+                        const Icon(Icons.lock_outline, size: 16),
+                      ],
+                    ),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.terminal_outlined),
+                    title: const Text('View logs'),
+                    subtitle: const Text('Errors & debug info'),
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute<void>(
+                        builder: (_) => TalkerScreen(talker: talker),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
             const SizedBox(height: 32),
 
-            // ── Sign out ───────────────────────────────────────────────
-            _SignOutButton(),
+            // ── Dev tools ─────────────────────────────────────────────────
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const Icon(Icons.science_outlined,
+                  color: AppColors.secondary),
+              title: const Text('Live Simulator'),
+              subtitle: const Text('Test realtime pipeline end-to-end'),
+              trailing: const Icon(Icons.chevron_right,
+                  color: AppColors.onSurfaceMuted),
+              onTap: () => context.push('/dev/simulate'),
+            ),
+            const SizedBox(height: 8),
+
+            // ── Sign out ──────────────────────────────────────────────────
+            OutlinedButton(
+              style: OutlinedButton.styleFrom(
+                side: const BorderSide(color: AppColors.error),
+                foregroundColor: AppColors.error,
+              ),
+              onPressed: () => _confirmSignOut(context, ref),
+              child: const Text('Sign out'),
+            ),
+            const SizedBox(height: 16),
           ],
         ),
       ),
     );
   }
+
+  Future<void> _confirmSignOut(BuildContext context, WidgetRef ref) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      // No useRootNavigator — AlertDialog blocks the whole screen regardless,
+      // and using the branch navigator ensures Navigator.pop works correctly.
+      builder: (dialogCtx) => AlertDialog(
+        title: const Text('Sign out?'),
+        content: const Text('You will need your magic link to sign back in.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx, true),
+            child: Text('Sign out', style: TextStyle(color: AppColors.error)),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      // SignOutScope.local clears SharedPreferences immediately without a
+      // network call — always succeeds regardless of connectivity.
+      await supabase.auth.signOut(scope: SignOutScope.local);
+      // GoRouter's GoRouterRefreshStream listens to onAuthStateChange and
+      // redirects to /sign-in automatically — no explicit navigation needed.
+    } catch (e) {
+      talker.error('Sign out error', e);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
-// Profile header — avatar + editable display name
+// Profile header — avatar + display name
 // ---------------------------------------------------------------------------
-class _ProfileHeader extends ConsumerStatefulWidget {
+
+class _ProfileHeader extends StatelessWidget {
   const _ProfileHeader({this.profile});
 
   final Map<String, dynamic>? profile;
 
-  @override
-  ConsumerState<_ProfileHeader> createState() => _ProfileHeaderState();
-}
-
-class _ProfileHeaderState extends ConsumerState<_ProfileHeader> {
-  bool _saving = false;
-
-  String get _displayName =>
-      (widget.profile?['display_name'] as String?) ??
-      supabase.auth.currentUser?.email ??
-      'User';
-
-  String get _initials {
-    final parts = _displayName.trim().split(' ');
-    if (parts.length >= 2) {
-      return '${parts.first[0]}${parts.last[0]}'.toUpperCase();
-    }
-    return _displayName.isNotEmpty
-        ? _displayName[0].toUpperCase()
-        : '?';
+  String get _displayName {
+    final explicit = profile?['display_name'] as String?;
+    if (explicit != null && explicit.isNotEmpty) return explicit;
+    final email = supabase.auth.currentUser?.email ?? '';
+    final atIdx = email.indexOf('@');
+    return atIdx > 0
+        ? email.substring(0, atIdx)
+        : (email.isNotEmpty ? email : 'User');
   }
 
-  Future<void> _editName(BuildContext context) async {
-    final controller =
-        TextEditingController(text: _displayName);
-    final result = await showDialog<String>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Edit display name'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          decoration: const InputDecoration(hintText: 'Your name'),
-          textCapitalization: TextCapitalization.words,
-        ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () =>
-                  Navigator.pop(ctx, controller.text.trim()),
-              child: const Text('Save')),
-        ],
-      ),
-    );
+  String get _initial =>
+      _displayName.isNotEmpty ? _displayName.trim()[0].toUpperCase() : '?';
 
-    if (result == null || result.isEmpty) return;
+  @override
+  Widget build(BuildContext context) {
+    final tt = Theme.of(context).textTheme;
+    return Column(
+      children: [
+        Container(
+          width: 80,
+          height: 80,
+          decoration: const BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: LinearGradient(
+              colors: [AppColors.primary, AppColors.tertiary],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+          child: Center(
+            child: Text(
+              _initial,
+              style: tt.displaySmall?.copyWith(color: AppColors.onPrimary),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+        Text(_displayName, style: tt.headlineSmall),
+        const SizedBox(height: 4),
+        Text(
+          supabase.auth.currentUser?.email ?? '',
+          style: tt.bodySmall?.copyWith(color: AppColors.onSurfaceVariant),
+        ),
+      ],
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Edit name dialog (static helper)
+// ---------------------------------------------------------------------------
+
+class _EditNameDialog extends ConsumerStatefulWidget {
+  const _EditNameDialog({this.profile});
+
+  final Map<String, dynamic>? profile;
+
+  static Future<void> show(
+    BuildContext context,
+    Map<String, dynamic>? profile,
+  ) async {
+    await showDialog<void>(
+      context: context,
+      builder: (_) => _EditNameDialog(profile: profile),
+    );
+  }
+
+  @override
+  ConsumerState<_EditNameDialog> createState() => _EditNameDialogState();
+}
+
+class _EditNameDialogState extends ConsumerState<_EditNameDialog> {
+  late final TextEditingController _controller = TextEditingController(
+    text: (widget.profile?['display_name'] as String?) ?? '',
+  );
+  bool _saving = false;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    final name = _controller.text.trim();
+    if (name.isEmpty) return;
     final user = supabase.auth.currentUser;
     if (user == null) return;
-
     setState(() => _saving = true);
     try {
       await supabase.from('profiles').upsert(
-        {'user_id': user.id, 'display_name': result},
+        {'user_id': user.id, 'display_name': name},
         onConflict: 'user_id',
       );
       ref.invalidate(_myProfileProvider);
+      if (mounted) Navigator.of(context).pop();
     } catch (e) {
-      if (context.mounted) {
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-              content: Text('Error: $e'),
-              backgroundColor:
-                  Theme.of(context).colorScheme.error),
+          SnackBar(content: Text('Error: $e')),
         );
       }
     } finally {
@@ -188,51 +387,28 @@ class _ProfileHeaderState extends ConsumerState<_ProfileHeader> {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        CircleAvatar(
-          radius: 40,
-          backgroundColor:
-              Theme.of(context).colorScheme.primaryContainer,
-          child: Text(
-            _initials,
-            style: TextStyle(
-              fontSize: 28,
-              fontWeight: FontWeight.bold,
-              color: Theme.of(context).colorScheme.onPrimaryContainer,
-            ),
-          ),
+    return AlertDialog(
+      title: const Text('Edit display name'),
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        decoration: const InputDecoration(hintText: 'Your name'),
+        textCapitalization: TextCapitalization.words,
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
         ),
-        const SizedBox(height: 12),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              _displayName,
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-            const SizedBox(width: 8),
-            if (_saving)
-              const SizedBox(
-                width: 16,
-                height: 16,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            else
-              IconButton(
-                icon: const Icon(Icons.edit, size: 18),
-                visualDensity: VisualDensity.compact,
-                onPressed: () => _editName(context),
-                tooltip: 'Edit name',
-              ),
-          ],
-        ),
-        Text(
-          supabase.auth.currentUser?.email ?? '',
-          style: Theme.of(context)
-              .textTheme
-              .bodySmall
-              ?.copyWith(color: Colors.grey),
+        FilledButton(
+          onPressed: _saving ? null : _save,
+          child: _saving
+              ? const SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const Text('Save'),
         ),
       ],
     );
@@ -242,6 +418,7 @@ class _ProfileHeaderState extends ConsumerState<_ProfileHeader> {
 // ---------------------------------------------------------------------------
 // Stats section
 // ---------------------------------------------------------------------------
+
 class _StatsSection extends StatelessWidget {
   const _StatsSection({required this.stats});
 
@@ -249,39 +426,78 @@ class _StatsSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final tt = Theme.of(context).textTheme;
     return Card(
+      shape: RoundedRectangleBorder(borderRadius: AppRadii.cardRadius),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Stats',
-                style: Theme.of(context).textTheme.titleMedium),
+            Text('Your Stats', style: tt.titleMedium),
             const SizedBox(height: 16),
-            Row(
-              children: [
-                Expanded(
-                  child: _StatCell(
-                    label: 'Total Points',
-                    value: '${stats.totalPoints}',
-                  ),
-                ),
-                const VerticalDivider(width: 1),
-                Expanded(
-                  child: _StatCell(
-                    label: 'Exact Scores',
-                    value: '${stats.exactCount}',
-                  ),
-                ),
-                const VerticalDivider(width: 1),
-                Expanded(
-                  child: _StatCell(
-                    label: 'Correct Results',
-                    value: '${stats.correctResultCount}',
-                  ),
-                ),
-              ],
+            Text(
+              '${stats.totalPoints}',
+              style: tt.displaySmall?.copyWith(
+                color: AppColors.primary,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
             ),
+            Text(
+              'total points',
+              style: tt.bodySmall?.copyWith(color: AppColors.onSurfaceVariant),
+            ),
+            const Divider(height: 24),
+            _StatRow(
+              icon: Icons.gps_fixed,
+              label: 'Exact scores',
+              value: '${stats.exactCount}',
+            ),
+            _StatRow(
+              icon: Icons.show_chart,
+              label: 'Correct outcomes',
+              value: '${stats.outcomeCount}',
+            ),
+            _StatRow(
+              icon: Icons.compare_arrows,
+              label: 'Correct goal diff',
+              value: '${stats.goalDiffCount}',
+            ),
+            _StatRow(
+              icon: Icons.flag,
+              label: 'First-team hits',
+              value: '${stats.firstTeamHits}',
+            ),
+            _StatRow(
+              icon: Icons.sports_soccer,
+              label: 'Goalscorer hits',
+              value: '${stats.goalscorerHits}',
+            ),
+            const SizedBox(height: 8),
+            TextButton(
+              onPressed: () => _showScoringExplainer(context),
+              child: const Text('How scoring works →'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showScoringExplainer(BuildContext context) {
+    showAppSheet<void>(
+      context: context,
+      builder: (_) => AppSheetBody(
+        title: 'How Scoring Works',
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: const [
+            _ScoreRow(pts: '2 pts', desc: 'Correct outcome (W/D/L)'),
+            _ScoreRow(pts: '3 pts', desc: 'Correct goal difference'),
+            _ScoreRow(pts: '3 pts', desc: 'Exact score (e.g. 2-1 → 2-1)'),
+            _ScoreRow(pts: '5 pts', desc: 'Goalscorer picked correctly'),
+            _ScoreRow(pts: '×2–6×', desc: 'Knockout round booster applied'),
           ],
         ),
       ),
@@ -289,55 +505,65 @@ class _StatsSection extends StatelessWidget {
   }
 }
 
-class _StatCell extends StatelessWidget {
-  const _StatCell({required this.label, required this.value});
+class _StatRow extends StatelessWidget {
+  const _StatRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
 
+  final IconData icon;
   final String label;
   final String value;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Text(
-          value,
-          style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                fontWeight: FontWeight.bold,
-              ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          label,
-          textAlign: TextAlign.center,
-          style: Theme.of(context)
-              .textTheme
-              .bodySmall
-              ?.copyWith(color: Colors.grey),
-        ),
-      ],
+    final tt = Theme.of(context).textTheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: AppColors.tertiary),
+          const SizedBox(width: 10),
+          Text(label, style: tt.bodyMedium),
+          const Spacer(),
+          Text(
+            value,
+            style: tt.titleMedium?.copyWith(
+              color: AppColors.primary,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
 
-// ---------------------------------------------------------------------------
-// Sign-out button
-// ---------------------------------------------------------------------------
-class _SignOutButton extends ConsumerWidget {
+class _ScoreRow extends StatelessWidget {
+  const _ScoreRow({required this.pts, required this.desc});
+
+  final String pts;
+  final String desc;
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return OutlinedButton.icon(
-      icon: const Icon(Icons.logout, color: Colors.red),
-      label: const Text('Sign out', style: TextStyle(color: Colors.red)),
-      style: OutlinedButton.styleFrom(
-        side: const BorderSide(color: Colors.red),
+  Widget build(BuildContext context) {
+    final tt = Theme.of(context).textTheme;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 48,
+            child: Text(
+              pts,
+              style: tt.labelLarge?.copyWith(color: AppColors.primary),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(child: Text(desc, style: tt.bodyMedium)),
+        ],
       ),
-      onPressed: () async {
-        final repo = ref.read(authRepositoryProvider);
-        await repo.signOut();
-        if (context.mounted) {
-          context.go('/sign-in');
-        }
-      },
     );
   }
 }
@@ -345,14 +571,23 @@ class _SignOutButton extends ConsumerWidget {
 // ---------------------------------------------------------------------------
 // Data classes
 // ---------------------------------------------------------------------------
+
 class _PredictionStats {
   const _PredictionStats({
     this.totalPoints = 0,
     this.exactCount = 0,
-    this.correctResultCount = 0,
+    this.outcomeCount = 0,
+    this.goalDiffCount = 0,
+    this.firstTeamHits = 0,
+    this.goalscorerHits = 0,
+    this.predictionCount = 0,
   });
 
   final int totalPoints;
   final int exactCount;
-  final int correctResultCount;
+  final int outcomeCount;
+  final int goalDiffCount;
+  final int firstTeamHits;
+  final int goalscorerHits;
+  final int predictionCount;
 }

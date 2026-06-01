@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.wcpredict.wcpredict"
+    namespace = "com.dlovric.wcpredict2026"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -21,13 +21,16 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.wcpredict.wcpredict"
+        applicationId = "com.dlovric.wcpredict2026"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // Used by the HTTPS App Links intent filter in AndroidManifest.xml.
+        // Replace with your actual domain once deployed, e.g. "wcpredict.vercel.app".
+        manifestPlaceholders["appLinkDomain"] = "wcpredict-auth.vercel.app"
     }
 
     buildTypes {

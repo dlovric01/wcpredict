@@ -12,6 +12,10 @@ dependencies:
 
   # Supabase
   supabase_flutter: ^2.8.4
+  google_sign_in: ^6.2.2
+  sign_in_with_apple: ^6.1.4
+  crypto: ^3.0.5
+  http: ^1.2.0
 
   # State management
   flutter_riverpod: ^2.6.1
@@ -28,8 +32,10 @@ dependencies:
   cached_network_image: ^3.4.1
   shimmer: ^3.0.0
   flutter_animate: ^4.5.2
-
+  google_fonts: ^6.2.1
+  material_symbols_icons: ^4.2784.0
   cupertino_icons: ^1.0.8
+  talker_flutter: ^5.1.16
 
 dev_dependencies:
   flutter_test:
@@ -39,6 +45,18 @@ dev_dependencies:
   riverpod_generator: ^2.6.5
   custom_lint: ^0.7.5
   riverpod_lint: ^2.6.5
+  flutter_launcher_icons: ^0.14.3
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/auth/google_g.png
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icon/app_icon.png"
+  remove_alpha_ios: true
+  background_color_ios: "#0A0E1A"
+  adaptive_icon_background: "#1A2138"
+  adaptive_icon_foreground: "assets/icon/app_icon.png"

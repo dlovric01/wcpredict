@@ -1,3 +1,5 @@
+import 'dart:ui' as ui;
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -10,11 +12,15 @@ import 'package:wcpredict/core/models/team_model.dart';
 import 'package:wcpredict/core/supabase_client.dart';
 import 'package:wcpredict/core/theme/app_colors.dart';
 import 'package:wcpredict/core/theme/app_radii.dart';
+import 'package:wcpredict/features/matches/predict_logic.dart';
+import 'package:wcpredict/features/matches/first_team_picker.dart';
 import 'package:wcpredict/features/matches/live_events_widget.dart';
 import 'package:wcpredict/shared/providers/match_detail_provider.dart';
 import 'package:wcpredict/shared/providers/predictions_provider.dart';
 import 'package:wcpredict/shared/widgets/team_flag.dart';
 import 'package:wcpredict/shared/widgets/verdict_pill.dart';
+import 'package:wcpredict/shared/providers/boosters_provider.dart';
+import 'package:wcpredict/shared/widgets/app_sheet.dart';
 
 // ---------------------------------------------------------------------------
 // Screen
@@ -161,8 +167,7 @@ class _HeroScoreCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isFinalOrLive =
-        match.status == 'final' || match.status == 'live';
+    final isFinalOrLive = match.status == 'final' || match.status == 'live';
 
     return Container(
       decoration: const BoxDecoration(
@@ -172,66 +177,60 @@ class _HeroScoreCard extends StatelessWidget {
           colors: [AppColors.surfaceHigh, AppColors.surfaceBase],
         ),
       ),
-      child: Stack(
-        children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 24),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Expanded(child: _TeamSide(team: match.team1, rightAlign: false)),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (isFinalOrLive)
-                        Text(
-                          '${liveOverride?['score_ft_team1'] ?? match.scoreFtTeam1 ?? 0}'
-                          '–'
-                          '${liveOverride?['score_ft_team2'] ?? match.scoreFtTeam2 ?? 0}',
-                          style: theme.textTheme.displayMedium?.copyWith(
-                            color: AppColors.onSurface,
-                            fontFeatures: const [FontFeature.tabularFigures()],
-                            fontWeight: FontWeight.w700,
-                          ),
-                        )
-                      else
-                        Text(
-                          match.kickoffTime != null
-                              ? DateFormat('d MMM\nHH:mm')
-                                  .format(match.kickoffTime!.toLocal())
-                              : 'TBC',
-                          style: theme.textTheme.titleMedium?.copyWith(
-                            color: AppColors.onSurface,
-                          ),
-                          textAlign: TextAlign.center,
-                        ),
-                      if (isFinalOrLive &&
-                          match.scoreHtTeam1 != null &&
-                          match.scoreHtTeam2 != null) ...[
-                        const SizedBox(height: 2),
-                        Text(
-                          'HT ${match.scoreHtTeam1}–${match.scoreHtTeam2}',
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: AppColors.onSurfaceMuted,
-                          ),
-                        ),
-                      ],
-                    ],
-                  ),
-                ),
-                Expanded(
-                    child: _TeamSide(team: match.team2, rightAlign: true)),
-              ],
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 24),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Expanded(child: _TeamSide(team: match.team1, rightAlign: false)),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (isFinalOrLive) ...[
+                    _StatusChip(match: match),
+                    const SizedBox(height: 8),
+                  ],
+                  if (isFinalOrLive)
+                    Text(
+                      '${liveOverride?['score_ft_team1'] ?? match.scoreFtTeam1 ?? 0}'
+                      '–'
+                      '${liveOverride?['score_ft_team2'] ?? match.scoreFtTeam2 ?? 0}',
+                      style: theme.textTheme.displayMedium?.copyWith(
+                        color: AppColors.onSurface,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                        fontWeight: FontWeight.w700,
+                      ),
+                    )
+                  else
+                    Text(
+                      match.kickoffTime != null
+                          ? DateFormat('d MMM\nHH:mm')
+                              .format(match.kickoffTime!.toLocal())
+                          : 'TBC',
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        color: AppColors.onSurface,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  if (isFinalOrLive &&
+                      match.scoreHtTeam1 != null &&
+                      match.scoreHtTeam2 != null) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      'HT ${match.scoreHtTeam1}–${match.scoreHtTeam2}',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: AppColors.onSurfaceMuted,
+                      ),
+                    ),
+                  ],
+                ],
+              ),
             ),
-          ),
-          Positioned(
-            top: 10,
-            right: 12,
-            child: _StatusChip(match: match),
-          ),
-        ],
+            Expanded(child: _TeamSide(team: match.team2, rightAlign: true)),
+          ],
+        ),
       ),
     );
   }
@@ -263,7 +262,7 @@ class _TeamSide extends StatelessWidget {
             fontWeight: FontWeight.w700,
           ),
           textAlign: rightAlign ? TextAlign.right : TextAlign.left,
-          maxLines: 2,
+          maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
         Text(
@@ -295,30 +294,16 @@ class _StatusChip extends StatelessWidget {
             border: Border.all(color: AppColors.outline),
           ),
           child: Text(
-            'FT',
+            'FINAL',
             style: theme.textTheme.labelSmall?.copyWith(
               color: AppColors.onSurfaceVariant,
-              fontWeight: FontWeight.w700,
+              fontWeight: FontWeight.w800,
+              letterSpacing: 0.6,
             ),
           ),
         ),
-      _ => Container(
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-          decoration: BoxDecoration(
-            color: AppColors.surfaceHighest,
-            borderRadius: AppRadii.pillRadius,
-            border: Border.all(color: AppColors.outlineVariant),
-          ),
-          child: Text(
-            match.kickoffTime != null
-                ? 'KO ${DateFormat('HH:mm').format(match.kickoffTime!.toLocal())}'
-                : 'Scheduled',
-            style: theme.textTheme.labelSmall?.copyWith(
-              color: AppColors.onSurfaceVariant,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ),
+      // Scheduled / unknown: header already shows the date + time, no chip.
+      _ => const SizedBox.shrink(),
     };
   }
 }
@@ -407,8 +392,7 @@ class _OverviewTab extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final isFinalOrLive =
-        match.status == 'final' || match.status == 'live';
+    final isFinalOrLive = match.status == 'final' || match.status == 'live';
 
     return RefreshIndicator(
       color: AppColors.primary,
@@ -551,6 +535,21 @@ class _PredictionSummaryCard extends StatelessWidget {
                 fontFeatures: const [FontFeature.tabularFigures()],
               ),
             ),
+            if (pred.predictedFirstTeamId != null) ...[
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  const Icon(Symbols.flag,
+                      size: 13, color: AppColors.onSurfaceVariant),
+                  const SizedBox(width: 5),
+                  Text(
+                    'First to score: ${_resolveTeamName(match, pred.predictedFirstTeamId!)}',
+                    style: theme.textTheme.bodySmall
+                        ?.copyWith(color: AppColors.onSurfaceVariant),
+                  ),
+                ],
+              ),
+            ],
             if (pred.predictedScorerId != null) ...[
               const SizedBox(height: 4),
               Row(
@@ -606,8 +605,7 @@ class _PredictionSummaryCard extends StatelessWidget {
           ] else ...[
             Row(
               children: [
-                const Icon(Symbols.lock,
-                    size: 15, color: AppColors.locked),
+                const Icon(Symbols.lock, size: 15, color: AppColors.locked),
                 const SizedBox(width: 6),
                 Text(
                   'Predictions closed',
@@ -639,6 +637,7 @@ class _PredictTab extends ConsumerStatefulWidget {
   final int matchId;
   final PredictionModel? existing;
   final VoidCallback onSaved;
+
   /// Live-streamed row from matchLiveStateProvider — may carry a fresher
   /// status than the cached MatchModel when the match kicks off mid-session.
   final Map<String, dynamic>? liveOverride;
@@ -656,16 +655,9 @@ class _PredictTabState extends ConsumerState<_PredictTab> {
 
   bool get _isZeroZero => _score1 == 0 && _score2 == 0;
 
-  /// True when predictions must be locked.
-  /// Checks both the (potentially cached) MatchModel AND the live-streamed
-  /// status so that going live mid-session locks the form immediately.
-  bool get _locked {
-    if (widget.match.isLocked) return true;
-    final liveStatus = widget.liveOverride?['status'] as String?;
-    return liveStatus == 'live' ||
-        liveStatus == 'final' ||
-        liveStatus == 'cancelled';
-  }
+  /// True when predictions must be locked. Delegated to the pure helper
+  /// so it's unit-testable independently of the widget tree.
+  bool get _locked => predictTabLocked(widget.match, widget.liveOverride);
 
   @override
   void initState() {
@@ -705,39 +697,20 @@ class _PredictTabState extends ConsumerState<_PredictTab> {
         _enforceConstraints();
       });
 
-  /// Enforce all score-dependent constraints on firstTeamId and scorerId.
-  ///   • 0–0: clear both (no goals → no first scorer or goalscorer pick).
-  ///   • team1 = 0, team2 > 0: only team2 can be first scorer;
-  ///     clear scorerId if the selected player is from team1.
-  ///   • team1 > 0, team2 = 0: mirror of the above.
-  ///   • Both > 0: any selection is valid — no forced changes.
+  /// Drop picks that violate the current score, via the pure helper in
+  /// `predict_logic.dart` (which is unit-tested separately).
   void _enforceConstraints() {
-    final t1Id = widget.match.team1?.id;
-    final t2Id = widget.match.team2?.id;
-
-    if (_isZeroZero) {
-      _firstTeamId = null;
-      _scorerId = null;
-      return;
-    }
-
-    if (_score1 > 0 && _score2 == 0) {
-      _firstTeamId = t1Id;
-      if (_scorerId != null) {
-        final isTeam2 =
-            (widget.match.team2?.players ?? []).any((p) => p.id == _scorerId);
-        if (isTeam2) _scorerId = null;
-      }
-    } else if (_score2 > 0 && _score1 == 0) {
-      _firstTeamId = t2Id;
-      if (_scorerId != null) {
-        final isTeam1 =
-            (widget.match.team1?.players ?? []).any((p) => p.id == _scorerId);
-        if (isTeam1) _scorerId = null;
-      }
-    }
+    final result = sanitisePredictionPicks(
+      score1: _score1,
+      score2: _score2,
+      firstTeamId: _firstTeamId,
+      scorerId: _scorerId,
+      team1Id: widget.match.team1?.id,
+      team2Id: widget.match.team2?.id,
+    );
+    _firstTeamId = result.firstTeamId;
+    _scorerId = result.scorerId;
   }
-
 
   Future<void> _save() async {
     if (_locked) return;
@@ -752,7 +725,7 @@ class _PredictTabState extends ConsumerState<_PredictTab> {
           'match_id': widget.match.id,
           'predicted_team1': _score1,
           'predicted_team2': _score2,
-          'predicted_first_team_id': _isZeroZero ? null : (_firstTeamId ?? widget.match.team1?.id),
+          'predicted_first_team_id': _isZeroZero ? null : _firstTeamId,
           'predicted_scorer_id': _isZeroZero ? null : _scorerId,
         },
         onConflict: 'user_id,match_id',
@@ -760,6 +733,7 @@ class _PredictTabState extends ConsumerState<_PredictTab> {
 
       ref.invalidate(myPredictionProvider(widget.matchId));
       ref.invalidate(matchByIdProvider(widget.matchId));
+      ref.invalidate(myAllPredictionsProvider);
 
       if (mounted) {
         HapticFeedback.mediumImpact();
@@ -796,8 +770,7 @@ class _PredictTabState extends ConsumerState<_PredictTab> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
                 color: AppColors.surfaceHigh,
                 borderRadius: AppRadii.buttonRadius,
@@ -920,7 +893,10 @@ class _PredictTabState extends ConsumerState<_PredictTab> {
                       const SizedBox(height: 12),
                       VerdictPill(
                           points: pred.pointsEarned,
-                          scorePoints: pred.pointsScore),
+                          pointsMatch: pred.pointsMatch,
+                          pointsFirstTeam: pred.pointsFirstTeam,
+                          pointsGoalscorer: pred.pointsGoalscorer,
+                          multiplier: pred.multiplier),
                     ] else if (!isFinal) ...[
                       const SizedBox(height: 8),
                       Text(
@@ -982,6 +958,44 @@ class _PredictTabState extends ConsumerState<_PredictTab> {
           child: ListView(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
             children: [
+              // Auto-multiplier badge (3rd place / Final)
+              if (widget.match.autoMultiplier > 1) ...[
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryContainer.withValues(alpha: 0.35),
+                    borderRadius: AppRadii.cardRadius,
+                    border: Border.all(
+                        color: AppColors.primary.withValues(alpha: 0.4)),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.bolt,
+                          size: 16, color: AppColors.primary),
+                      const SizedBox(width: 8),
+                      Text(
+                        '${widget.match.round} · auto ×${widget.match.autoMultiplier} multiplier',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: AppColors.primary,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
+
+              // User booster toggle (R32/R16/QF/SF)
+              if (widget.match.isBoosterRound) ...[
+                _BoosterToggle(
+                  match: widget.match,
+                  matchId: widget.matchId,
+                ),
+                const SizedBox(height: 16),
+              ],
+
               if (_isZeroZero)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 16),
@@ -991,7 +1005,7 @@ class _PredictTabState extends ConsumerState<_PredictTab> {
                           size: 14, color: AppColors.onSurfaceMuted),
                       const SizedBox(width: 6),
                       Text(
-                        'Set a score to unlock first scorer & goalscorer picks',
+                        'Set a score to unlock first-team & goalscorer picks',
                         style: theme.textTheme.bodySmall
                             ?.copyWith(color: AppColors.onSurfaceMuted),
                       ),
@@ -1001,46 +1015,21 @@ class _PredictTabState extends ConsumerState<_PredictTab> {
 
               if (!_isZeroZero) ...[
                 Text(
-                  'First Team to Score',
+                  'First team to score (optional · +2 pts)',
                   style: theme.textTheme.labelLarge
                       ?.copyWith(color: AppColors.onSurfaceVariant),
                 ),
                 const SizedBox(height: 8),
-                SegmentedButton<int>(
-                  segments: [
-                    ButtonSegment<int>(
-                      value: t1?.id ?? 0,
-                      enabled: _score1 > 0,
-                      label: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          TeamFlag(team: t1, size: 16),
-                          const SizedBox(width: 5),
-                          Text(t1?.code ?? 'T1'),
-                        ],
-                      ),
-                    ),
-                    ButtonSegment<int>(
-                      value: t2?.id ?? 0,
-                      enabled: _score2 > 0,
-                      label: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          TeamFlag(team: t2, size: 16),
-                          const SizedBox(width: 5),
-                          Text(t2?.code ?? 'T2'),
-                        ],
-                      ),
-                    ),
-                  ],
-                  selected: {_firstTeamId ?? (t1?.id ?? 0)},
-                  onSelectionChanged: (s) =>
-                      setState(() => _firstTeamId = s.first),
+                FirstTeamPicker(
+                  match: widget.match,
+                  selectedTeamId: _firstTeamId,
+                  score1: _score1,
+                  score2: _score2,
+                  onPick: (id) => setState(() => _firstTeamId = id),
                 ),
-
                 const SizedBox(height: 20),
                 Text(
-                  'Goalscorer (optional)',
+                  'Goalscorer (optional · +8 pts)',
                   style: theme.textTheme.labelLarge
                       ?.copyWith(color: AppColors.onSurfaceVariant),
                 ),
@@ -1085,8 +1074,7 @@ class _PredictTabState extends ConsumerState<_PredictTab> {
                         widget.existing != null
                             ? 'Update Prediction'
                             : 'Save Prediction',
-                        style:
-                            const TextStyle(fontWeight: FontWeight.w700),
+                        style: const TextStyle(fontWeight: FontWeight.w700),
                       ),
               ),
             ),
@@ -1105,17 +1093,65 @@ class _TeamsTab extends StatelessWidget {
   const _TeamsTab({required this.match});
   final MatchModel match;
 
-  bool get _hasLineups {
+  bool get _hasPlayers {
     final t1 = match.team1?.players;
     final t2 = match.team2?.players;
     return (t1 != null && t1.isNotEmpty) || (t2 != null && t2.isNotEmpty);
+  }
+
+  /// Sort order: GK → DEF → MID → FWD → unknown; starters before subs.
+  static int _playerSort(PlayerModel a, PlayerModel b) {
+    int posRank(PlayerModel p) {
+      final pos = (p.position ?? '').toUpperCase();
+      if (pos.startsWith('GK')) {
+        return 0;
+      }
+      if (pos == 'DEF' ||
+          pos == 'DF' ||
+          pos == 'CB' ||
+          pos == 'LB' ||
+          pos == 'RB' ||
+          pos == 'LWB' ||
+          pos == 'RWB') {
+        return 1;
+      }
+      if (pos == 'MID' ||
+          pos == 'MF' ||
+          pos == 'CM' ||
+          pos == 'DM' ||
+          pos == 'AM' ||
+          pos == 'LM' ||
+          pos == 'RM') {
+        return 2;
+      }
+      if (pos == 'FWD' ||
+          pos == 'FW' ||
+          pos == 'ST' ||
+          pos == 'LW' ||
+          pos == 'RW' ||
+          pos == 'CF' ||
+          pos == 'SS') {
+        return 3;
+      }
+      return 4;
+    }
+
+    // Starters first
+    if (a.isStarter != b.isStarter) return a.isStarter ? -1 : 1;
+    // Then by position group
+    final cmp = posRank(a).compareTo(posRank(b));
+    if (cmp != 0) return cmp;
+    // Then by jersey number
+    final na = a.jerseyNumber ?? 999;
+    final nb = b.jerseyNumber ?? 999;
+    return na.compareTo(nb);
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    if (!_hasLineups) {
+    if (!_hasPlayers) {
       return Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1133,40 +1169,74 @@ class _TeamsTab extends StatelessWidget {
       );
     }
 
+    final t1Players = [...(match.team1?.players ?? <PlayerModel>[])]
+      ..sort(_playerSort);
+    final t2Players = [...(match.team2?.players ?? <PlayerModel>[])]
+      ..sort(_playerSort);
+
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (match.formationTeam1 != null || match.formationTeam2 != null)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Row(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ── Team 1 ──────────────────────────────────────────────────────
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (match.team1 != null)
-                    Text(
-                      '${match.team1!.code}  ${match.formationTeam1 ?? ''}',
-                      style: theme.textTheme.labelMedium?.copyWith(
-                        color: AppColors.onSurfaceVariant,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  const Spacer(),
-                  if (match.team2 != null)
-                    Text(
-                      '${match.formationTeam2 ?? ''}  ${match.team2!.code}',
-                      style: theme.textTheme.labelMedium?.copyWith(
-                        color: AppColors.onSurfaceVariant,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
+                  if (match.team1 != null) _TeamHeader(team: match.team1!),
+                  const SizedBox(height: 4),
+                  for (final p in t1Players)
+                    _PlayerRow(player: p, rightAlign: false),
                 ],
               ),
             ),
-          _FormationPitch(match: match),
-          const SizedBox(height: 16),
-          _SubstitutesList(match: match),
-        ],
+            const SizedBox(width: 12),
+            // ── Team 2 ──────────────────────────────────────────────────────
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  if (match.team2 != null)
+                    _TeamHeader(team: match.team2!, rightAlign: true),
+                  const SizedBox(height: 4),
+                  for (final p in t2Players)
+                    _PlayerRow(player: p, rightAlign: true),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TeamHeader extends StatelessWidget {
+  const _TeamHeader({required this.team, this.rightAlign = false});
+  final TeamModel team;
+  final bool rightAlign;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final flag = TeamFlag(team: team, size: 20);
+    final name = Text(
+      team.name,
+      style: theme.textTheme.titleSmall?.copyWith(
+        fontWeight: FontWeight.w700,
+        color: AppColors.onSurface,
+      ),
+    );
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        mainAxisAlignment:
+            rightAlign ? MainAxisAlignment.end : MainAxisAlignment.start,
+        children: rightAlign
+            ? [name, const SizedBox(width: 8), flag]
+            : [flag, const SizedBox(width: 8), name],
       ),
     );
   }
@@ -1307,62 +1377,113 @@ class _PlayerChip extends StatelessWidget {
     required this.player,
     required this.selected,
     required this.onTap,
+    this.rightAlign = false,
   });
 
   final PlayerModel player;
   final bool selected;
   final VoidCallback onTap;
+  final bool rightAlign;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final nameStyle = theme.textTheme.labelMedium?.copyWith(
+      color: selected ? AppColors.onPrimaryContainer : AppColors.onSurface,
+      fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
+    );
+    final numberStyle = theme.textTheme.labelSmall?.copyWith(
+      color: selected
+          ? AppColors.onPrimaryContainer.withValues(alpha: 0.7)
+          : AppColors.onSurfaceMuted,
+    );
+    final numberStr =
+        player.jerseyNumber != null ? '#${player.jerseyNumber}' : null;
+
     return GestureDetector(
       onTap: onTap,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color:
-              selected ? AppColors.primaryContainer : AppColors.surfaceHigh,
-          borderRadius: AppRadii.pillRadius,
-          border: Border.all(
-            color: selected ? AppColors.primary : AppColors.outline,
-            width: selected ? 1.5 : 1,
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            _PositionBadge(position: player.position),
-            const SizedBox(width: 6),
-            Text(
-              player.name,
-              style: theme.textTheme.labelMedium?.copyWith(
-                color: selected
-                    ? AppColors.onPrimaryContainer
-                    : AppColors.onSurface,
-                fontWeight:
-                    selected ? FontWeight.w700 : FontWeight.w500,
-              ),
+      child: LayoutBuilder(
+        builder: (ctx, c) {
+          // Available width for the name = chip max width minus everything else.
+          // Chip horizontal padding (10+10), badge upper bound (~36), gap to name (6),
+          // optional gap-to-number (4) + measured number text width.
+          const chipHPad = 20.0;
+          const badgeMaxWidth = 36.0;
+          const gapBadgeName = 6.0;
+          const gapNameNumber = 4.0;
+          final numberWidth = numberStr == null
+              ? 0.0
+              : _measureTextWidth(numberStr, numberStyle);
+          final reserved = chipHPad +
+              badgeMaxWidth +
+              gapBadgeName +
+              (numberStr == null ? 0 : gapNameNumber + numberWidth);
+          final availableForName = c.maxWidth - reserved;
+
+          // If the full name doesn't fit, drop the first name to an initial.
+          // Falls back to a plain ellipsis when even the abbreviation overflows.
+          final fullName = player.name;
+          final fullWidth = _measureTextWidth(fullName, nameStyle);
+          String displayName = fullName;
+          if (fullWidth > availableForName) {
+            final tokens = fullName.split(RegExp(r'\s+'));
+            if (tokens.length >= 2 &&
+                tokens.first.length > 1 &&
+                !tokens.first.endsWith('.')) {
+              displayName = '${tokens.first[0]}. ${tokens.skip(1).join(' ')}';
+            }
+          }
+
+          final badge = _PositionBadge(position: player.position);
+          final nameWidget = Flexible(
+            child: Text(
+              displayName,
+              style: nameStyle,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              softWrap: false,
             ),
-            if (player.jerseyNumber != null) ...[
-              const SizedBox(width: 4),
-              Text(
-                '#${player.jerseyNumber}',
-                style: theme.textTheme.labelSmall?.copyWith(
-                  color: selected
-                      ? AppColors.onPrimaryContainer
-                          .withValues(alpha: 0.7)
-                      : AppColors.onSurfaceMuted,
+          );
+          final number =
+              numberStr == null ? null : Text(numberStr, style: numberStyle);
+
+          final children = <Widget>[
+            badge,
+            const SizedBox(width: gapBadgeName),
+            nameWidget,
+            if (number != null) ...[
+              const SizedBox(width: gapNameNumber),
+              number,
+            ],
+          ];
+
+          return ConstrainedBox(
+            constraints: BoxConstraints(maxWidth: c.maxWidth),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 150),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: selected
+                    ? AppColors.primaryContainer
+                    : AppColors.surfaceHigh,
+                borderRadius: AppRadii.pillRadius,
+                border: Border.all(
+                  color: selected ? AppColors.primary : AppColors.outline,
+                  width: selected ? 1.5 : 1,
                 ),
               ),
-            ],
-          ],
-        ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: rightAlign ? children.reversed.toList() : children,
+              ),
+            ),
+          );
+        },
       ),
     );
   }
 }
+
 // ---------------------------------------------------------------------------
 // _ScorerPickerButton — tappable row showing the currently selected scorer
 // ---------------------------------------------------------------------------
@@ -1398,11 +1519,8 @@ class _ScorerPickerButton extends StatelessWidget {
 
     return InkWell(
       onTap: () async {
-        final picked = await showModalBottomSheet<int?>(
+        final picked = await showAppSheet<int?>(
           context: context,
-          isScrollControlled: true,
-          useSafeArea: true,
-          backgroundColor: Colors.transparent,
           builder: (_) => _ScorerPickerSheet(
             match: match,
             currentScorerId: scorerId,
@@ -1471,7 +1589,8 @@ class _ScorerPickerButton extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _ScorerPickerSheet extends StatefulWidget {
-  const _ScorerPickerSheet({required this.match, required this.currentScorerId});
+  const _ScorerPickerSheet(
+      {required this.match, required this.currentScorerId});
   final MatchModel match;
   final int? currentScorerId;
 
@@ -1512,445 +1631,174 @@ class _ScorerPickerSheetState extends State<_ScorerPickerSheet> {
     final hasAny = t1Players.isNotEmpty || t2Players.isNotEmpty;
 
     return DraggableScrollableSheet(
-      initialChildSize: 0.92,
+      initialChildSize: 0.95,
       minChildSize: 0.5,
       maxChildSize: 0.95,
       expand: false,
-      builder: (_, scrollController) => Container(
-        decoration: const BoxDecoration(
-          color: AppColors.surfaceBase,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        child: Column(
-          children: [
-            // Drag handle
-            Padding(
-              padding: const EdgeInsets.only(top: 10, bottom: 4),
-              child: Container(
-                width: 36,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: AppColors.outlineVariant,
-                  borderRadius: BorderRadius.circular(2),
+      builder: (_, scrollController) => Column(
+        children: [
+          // Header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text('Pick Goalscorer',
+                      style: theme.textTheme.titleMedium
+                          ?.copyWith(color: AppColors.onSurface)),
                 ),
-              ),
-            ),
-            // Header
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 12),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text('Pick Goalscorer',
-                        style: theme.textTheme.titleMedium
-                            ?.copyWith(color: AppColors.onSurface)),
+                if (widget.currentScorerId != null)
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(-1),
+                    style: TextButton.styleFrom(
+                      foregroundColor: AppColors.error,
+                      padding: EdgeInsets.zero,
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const Text('Clear'),
                   ),
-                  if (widget.currentScorerId != null)
-                    TextButton(
-                      onPressed: () => Navigator.of(context).pop(-1),
-                      style: TextButton.styleFrom(
-                        foregroundColor: AppColors.error,
-                        padding: EdgeInsets.zero,
-                        minimumSize: Size.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                      child: const Text('Clear'),
-                    ),
-                ],
-              ),
+              ],
             ),
-            // Search
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-              child: TextField(
-                controller: _searchCtrl,
-                autofocus: true,
-                decoration: InputDecoration(
-                  prefixIcon:
-                      const Icon(Icons.search, size: 18),
-                  hintText: 'Search players…',
-                  isDense: true,
-                  suffixIcon: _query.isNotEmpty
-                      ? IconButton(
-                          icon: const Icon(Icons.clear, size: 16),
-                          onPressed: () {
-                            _searchCtrl.clear();
-                            setState(() => _query = '');
-                          },
-                        )
-                      : null,
-                ),
-                onChanged: (v) => setState(() => _query = v),
+          ),
+          // Search
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: TextField(
+              controller: _searchCtrl,
+              autofocus: true,
+              decoration: InputDecoration(
+                prefixIcon: const Icon(Icons.search, size: 18),
+                hintText: 'Search players…',
+                isDense: true,
+                suffixIcon: _query.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear, size: 16),
+                        onPressed: () {
+                          _searchCtrl.clear();
+                          setState(() => _query = '');
+                        },
+                      )
+                    : null,
               ),
+              onChanged: (v) => setState(() => _query = v),
             ),
-            // Player list
-            Expanded(
-              child: hasAny
-                  ? ListView(
-                      controller: scrollController,
-                      padding:
-                          const EdgeInsets.fromLTRB(16, 0, 16, 32),
+          ),
+          // Player list — two columns: home left, away right (mirrored).
+          Expanded(
+            child: hasAny
+                ? SingleChildScrollView(
+                    controller: scrollController,
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 32),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        if (t1 != null && t1Players.isNotEmpty) ...[
-                          _TeamGroupHeader(team: t1),
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: t1Players
-                                .map((p) => _PlayerChip(
-                                      player: p,
-                                      selected:
-                                          p.id == widget.currentScorerId,
-                                      onTap: () =>
-                                          Navigator.of(context).pop(p.id),
-                                    ))
-                                .toList(),
+                        Expanded(
+                          child: _PlayerColumn(
+                            team: t1,
+                            players: t1Players,
+                            rightAlign: false,
+                            currentScorerId: widget.currentScorerId,
                           ),
-                          const SizedBox(height: 16),
-                        ],
-                        if (t2 != null && t2Players.isNotEmpty) ...[
-                          _TeamGroupHeader(team: t2),
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: t2Players
-                                .map((p) => _PlayerChip(
-                                      player: p,
-                                      selected:
-                                          p.id == widget.currentScorerId,
-                                      onTap: () =>
-                                          Navigator.of(context).pop(p.id),
-                                    ))
-                                .toList(),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: _PlayerColumn(
+                            team: t2,
+                            players: t2Players,
+                            rightAlign: true,
+                            currentScorerId: widget.currentScorerId,
                           ),
-                        ],
+                        ),
                       ],
-                    )
-                  : Center(
-                      child: Text(
-                        _query.isNotEmpty
-                            ? 'No players match "$_query"'
-                            : 'No player data available',
-                        style: theme.textTheme.bodyMedium
-                            ?.copyWith(color: AppColors.onSurfaceMuted),
-                      ),
                     ),
-            ),
-          ],
-        ),
+                  )
+                : Center(
+                    child: Text(
+                      _query.isNotEmpty
+                          ? 'No players match "$_query"'
+                          : 'No player data available',
+                      style: theme.textTheme.bodyMedium
+                          ?.copyWith(color: AppColors.onSurfaceMuted),
+                    ),
+                  ),
+          ),
+        ],
       ),
+    );
+  }
+}
+
+class _PlayerColumn extends StatelessWidget {
+  const _PlayerColumn({
+    required this.team,
+    required this.players,
+    required this.rightAlign,
+    required this.currentScorerId,
+  });
+
+  final TeamModel? team;
+  final List<PlayerModel> players;
+  final bool rightAlign;
+  final int? currentScorerId;
+
+  @override
+  Widget build(BuildContext context) {
+    if (team == null || players.isEmpty) return const SizedBox.shrink();
+    return Column(
+      crossAxisAlignment:
+          rightAlign ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+      children: [
+        _TeamGroupHeader(team: team!, rightAlign: rightAlign),
+        for (final p in players) ...[
+          _PlayerChip(
+            player: p,
+            selected: p.id == currentScorerId,
+            rightAlign: rightAlign,
+            onTap: () => Navigator.of(context).pop(p.id),
+          ),
+          const SizedBox(height: 8),
+        ],
+      ],
     );
   }
 }
 
 class _TeamGroupHeader extends StatelessWidget {
-  const _TeamGroupHeader({required this.team});
+  const _TeamGroupHeader({required this.team, this.rightAlign = false});
   final TeamModel team;
+  final bool rightAlign;
 
   @override
   Widget build(BuildContext context) {
+    final flag = TeamFlag(team: team, size: 16);
+    final name = Text(
+      team.name,
+      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+            color: AppColors.onSurfaceVariant,
+            fontWeight: FontWeight.w700,
+          ),
+    );
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(
-        children: [
-          TeamFlag(team: team, size: 16),
-          const SizedBox(width: 8),
-          Text(
-            team.name,
-            style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                  color: AppColors.onSurfaceVariant,
-                  fontWeight: FontWeight.w700,
-                ),
-          ),
-        ],
+        mainAxisAlignment:
+            rightAlign ? MainAxisAlignment.end : MainAxisAlignment.start,
+        children: rightAlign
+            ? [name, const SizedBox(width: 8), flag]
+            : [flag, const SizedBox(width: 8), name],
       ),
     );
   }
 }
 
-// ---------------------------------------------------------------------------
-// Formation Pitch
-// ---------------------------------------------------------------------------
-
-class _FormationPitch extends StatelessWidget {
-  const _FormationPitch({required this.match});
-  final MatchModel match;
-
-  @override
-  Widget build(BuildContext context) {
-    final t1Starters = (match.team1?.players ?? [])
-        .where((p) => p.isStarter && p.grid != null)
-        .toList();
-    final t2Starters = (match.team2?.players ?? [])
-        .where((p) => p.isStarter && p.grid != null)
-        .toList();
-
-    int maxRow(List<PlayerModel> players) {
-      int m = 1;
-      for (final p in players) {
-        final r = int.tryParse(p.grid!.split(':')[0]) ?? 1;
-        if (r > m) m = r;
-      }
-      return m;
-    }
-
-    final t1MaxRow = maxRow(t1Starters);
-    final t2MaxRow = maxRow(t2Starters);
-
-    // Build row→count maps for x spacing
-    Map<int, int> rowCounts(List<PlayerModel> players) {
-      final counts = <int, int>{};
-      for (final p in players) {
-        final r = int.tryParse(p.grid!.split(':')[0]) ?? 1;
-        counts[r] = (counts[r] ?? 0) + 1;
-      }
-      return counts;
-    }
-
-    final t1RowCounts = rowCounts(t1Starters);
-    final t2RowCounts = rowCounts(t2Starters);
-
-    return LayoutBuilder(builder: (context, constraints) {
-      final width = constraints.maxWidth;
-      const height = 340.0;
-
-      List<Widget> dots = [];
-
-      for (final p in t1Starters) {
-        final parts = p.grid!.split(':');
-        final row = int.tryParse(parts[0]) ?? 1;
-        final col = int.tryParse(parts.length > 1 ? parts[1] : '1') ?? 1;
-        final countInRow = t1RowCounts[row] ?? 1;
-        final xFrac = col / (countInRow + 1);
-        final yFrac = 0.04 + (row - 1) / t1MaxRow * 0.40;
-        final x = (xFrac * width - 14).clamp(0.0, width - 28);
-        final y = (yFrac * height - 14).clamp(0.0, height - 28);
-        dots.add(Positioned(
-          left: x,
-          top: y,
-          child: _PlayerDot(player: p),
-        ));
-      }
-
-      for (final p in t2Starters) {
-        final parts = p.grid!.split(':');
-        final row = int.tryParse(parts[0]) ?? 1;
-        final col = int.tryParse(parts.length > 1 ? parts[1] : '1') ?? 1;
-        final countInRow = t2RowCounts[row] ?? 1;
-        final xFrac = col / (countInRow + 1);
-        final yFrac = 0.56 + (t2MaxRow - row) / t2MaxRow * 0.40;
-        final x = (xFrac * width - 14).clamp(0.0, width - 28);
-        final y = (yFrac * height - 14).clamp(0.0, height - 28);
-        dots.add(Positioned(
-          left: x,
-          top: y,
-          child: _PlayerDot(player: p),
-        ));
-      }
-
-      return SizedBox(
-        height: height,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: Stack(
-            children: [
-              Positioned.fill(
-                child: CustomPaint(painter: _PitchPainter()),
-              ),
-              // Team 1 formation label (top)
-              if (match.formationTeam1 != null)
-                Positioned(
-                  top: 6,
-                  left: 0,
-                  right: 0,
-                  child: Text(
-                    '${match.team1?.code ?? ''}  ${match.formationTeam1}',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              // Team 2 formation label (bottom)
-              if (match.formationTeam2 != null)
-                Positioned(
-                  bottom: 6,
-                  left: 0,
-                  right: 0,
-                  child: Text(
-                    '${match.formationTeam2}  ${match.team2?.code ?? ''}',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Colors.white70,
-                      fontSize: 10,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ...dots,
-            ],
-          ),
-        ),
-      );
-    });
-  }
-}
-
-class _PlayerDot extends StatelessWidget {
-  const _PlayerDot({required this.player});
-  final PlayerModel player;
-
-  @override
-  Widget build(BuildContext context) {
-    final pos = (player.position ?? '').toUpperCase();
-    final color = AppColors.forPosition(pos);
-    final name = _decodeHtml(player.name);
-    final displayName = name.length > 8 ? name.substring(0, 8) : name;
-
-    return SizedBox(
-      width: 28,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 28,
-            height: 28,
-            decoration: BoxDecoration(
-              color: color,
-              shape: BoxShape.circle,
-              border: Border.all(color: Colors.white, width: 1),
-            ),
-            alignment: Alignment.center,
-            child: Text(
-              '${player.jerseyNumber ?? ''}',
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 10,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-          Text(
-            displayName,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 8,
-              shadows: [Shadow(color: Colors.black, blurRadius: 2)],
-            ),
-            overflow: TextOverflow.clip,
-            maxLines: 1,
-            textAlign: TextAlign.center,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _PitchPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final w = size.width;
-    final h = size.height;
-
-    // Background
-    canvas.drawRect(
-      Rect.fromLTWH(0, 0, w, h),
-      Paint()..color = const Color(0xFF1A5C2A),
-    );
-
-    final paint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.5;
-
-    // Outer border (inset 4px)
-    canvas.drawRect(Rect.fromLTRB(4, 4, w - 4, h - 4), paint);
-
-    // Halfway line
-    canvas.drawLine(Offset(4, h / 2), Offset(w - 4, h / 2), paint);
-
-    // Center circle (~12% of height radius)
-    canvas.drawCircle(Offset(w / 2, h / 2), h * 0.12, paint);
-
-    // Top penalty area: 20%→80% width, 0→18% height
-    canvas.drawRect(
-      Rect.fromLTRB(w * 0.20, 4, w * 0.80, h * 0.18),
-      paint,
-    );
-
-    // Bottom penalty area: 20%→80% width, 82%→100% height
-    canvas.drawRect(
-      Rect.fromLTRB(w * 0.20, h * 0.82, w * 0.80, h - 4),
-      paint,
-    );
-  }
-
-  @override
-  bool shouldRepaint(covariant CustomPainter old) => false;
-}
-
-class _SubstitutesList extends StatelessWidget {
-  const _SubstitutesList({required this.match});
-  final MatchModel match;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final t1Subs = (match.team1?.players ?? [])
-        .where((p) => !p.isStarter)
-        .toList();
-    final t2Subs = (match.team2?.players ?? [])
-        .where((p) => !p.isStarter)
-        .toList();
-
-    if (t1Subs.isEmpty && t2Subs.isEmpty) return const SizedBox.shrink();
-
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (match.team1 != null)
-                Text(
-                  '${match.team1!.code} Subs',
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: AppColors.onSurfaceVariant,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              const SizedBox(height: 4),
-              for (final p in t1Subs)
-                _PlayerRow(player: p, rightAlign: false),
-            ],
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              if (match.team2 != null)
-                Text(
-                  '${match.team2!.code} Subs',
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: AppColors.onSurfaceVariant,
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              const SizedBox(height: 4),
-              for (final p in t2Subs)
-                _PlayerRow(player: p, rightAlign: true),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
+/// Resolves a team_id to a display name by matching against the match's
+/// two teams. Falls back to the id when the team is not on this match
+/// (should not happen — the validation trigger rejects such writes).
+String _resolveTeamName(MatchModel match, int teamId) {
+  if (match.team1?.id == teamId) return match.team1!.name;
+  if (match.team2?.id == teamId) return match.team2!.name;
+  return '#$teamId';
 }
 
 /// Minimal HTML entity decoder for player names stored with entities in the DB.
@@ -1962,6 +1810,16 @@ String _decodeHtml(String s) => s
     .replaceAll('&gt;', '>')
     .replaceAll('&quot;', '"')
     .replaceAll('&nbsp;', ' ');
+
+/// Layout-time width measurement for a single-line text run.
+double _measureTextWidth(String text, TextStyle? style) {
+  final tp = TextPainter(
+    text: TextSpan(text: text, style: style),
+    maxLines: 1,
+    textDirection: ui.TextDirection.ltr,
+  )..layout();
+  return tp.size.width;
+}
 
 class _PlayerRow extends StatelessWidget {
   const _PlayerRow({required this.player, required this.rightAlign});
@@ -2015,7 +1873,8 @@ class _PositionBadge extends StatelessWidget {
     final raw = (position ?? '').toUpperCase();
     final pos = switch (raw) {
       final s when s.startsWith('GK') => 'GK',
-      final s when s == 'DEF' ||
+      final s
+          when s == 'DEF' ||
               s == 'DF' ||
               s == 'CB' ||
               s == 'LB' ||
@@ -2023,7 +1882,8 @@ class _PositionBadge extends StatelessWidget {
               s == 'LWB' ||
               s == 'RWB' =>
         'DEF',
-      final s when s == 'MID' ||
+      final s
+          when s == 'MID' ||
               s == 'MF' ||
               s == 'CM' ||
               s == 'DM' ||
@@ -2031,7 +1891,8 @@ class _PositionBadge extends StatelessWidget {
               s == 'LM' ||
               s == 'RM' =>
         'MID',
-      final s when s == 'FWD' ||
+      final s
+          when s == 'FWD' ||
               s == 'FW' ||
               s == 'ST' ||
               s == 'LW' ||
@@ -2045,6 +1906,7 @@ class _PositionBadge extends StatelessWidget {
     final color = AppColors.forPosition(pos);
 
     return Container(
+      constraints: const BoxConstraints(minWidth: 30),
       padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.18),
@@ -2053,11 +1915,133 @@ class _PositionBadge extends StatelessWidget {
       ),
       child: Text(
         pos,
+        textAlign: TextAlign.center,
         style: theme.textTheme.labelSmall?.copyWith(
           color: color,
           fontWeight: FontWeight.w700,
           fontSize: 9,
         ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// _BoosterToggle — apply/remove the round booster for a knockout match
+// ---------------------------------------------------------------------------
+
+class _BoosterToggle extends ConsumerStatefulWidget {
+  const _BoosterToggle({required this.match, required this.matchId});
+  final MatchModel match;
+  final int matchId;
+
+  @override
+  ConsumerState<_BoosterToggle> createState() => _BoosterToggleState();
+}
+
+class _BoosterToggleState extends ConsumerState<_BoosterToggle> {
+  bool _saving = false;
+
+  Future<void> _toggle(bool active) async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      final user = supabase.auth.currentUser;
+      if (user == null) return;
+      if (active) {
+        await supabase.from('round_boosters').upsert({
+          'user_id': user.id,
+          'round': widget.match.round,
+          'match_id': widget.matchId,
+          'multiplier': widget.match.boosterMultiplier,
+        }, onConflict: 'user_id,round');
+      } else {
+        await supabase
+            .from('round_boosters')
+            .delete()
+            .eq('user_id', user.id)
+            .eq('round', widget.match.round ?? '');
+      }
+      ref.invalidate(boosterForMatchProvider(widget.matchId));
+      ref.invalidate(myBoostersProvider);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: AppColors.error,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final boosterAsync = ref.watch(boosterForMatchProvider(widget.matchId));
+    final hasBooster = boosterAsync.valueOrNull != null;
+    final multiplier = widget.match.boosterMultiplier;
+    final theme = Theme.of(context);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: hasBooster
+            ? AppColors.primaryContainer.withValues(alpha: 0.35)
+            : AppColors.surfaceHigh,
+        borderRadius: AppRadii.cardRadius,
+        border: Border.all(
+          color: hasBooster
+              ? AppColors.primary.withValues(alpha: 0.5)
+              : AppColors.outlineVariant,
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            hasBooster ? Icons.bolt : Icons.bolt_outlined,
+            size: 18,
+            color: hasBooster ? AppColors.primary : AppColors.onSurfaceMuted,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${widget.match.round} Booster ×$multiplier',
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                    color: hasBooster ? AppColors.primary : AppColors.onSurface,
+                  ),
+                ),
+                Text(
+                  hasBooster
+                      ? 'Applied — your score is multiplied by $multiplier'
+                      : 'Use your ${widget.match.round} booster on this match',
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: AppColors.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          if (_saving)
+            const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          else
+            Switch(
+              value: hasBooster,
+              onChanged: _toggle,
+              activeTrackColor: AppColors.primary,
+            ),
+        ],
       ),
     );
   }

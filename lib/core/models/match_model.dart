@@ -21,6 +21,9 @@ class MatchModel {
   /// Populated when the query joins the teams table.
   final TeamModel? team1;
   final TeamModel? team2;
+  /// Formation strings fetched from the lineup endpoint, e.g. "4-3-3".
+  final String? formationTeam1;
+  final String? formationTeam2;
 
   const MatchModel({
     required this.id,
@@ -41,13 +44,46 @@ class MatchModel {
     this.updatedAt,
     this.team1,
     this.team2,
+    this.formationTeam1,
+    this.formationTeam2,
   });
 
   /// Predictions are locked once the match is no longer scheduled.
   bool get isLocked {
-    if (status == 'live' || status == 'final') return true;
+    if (status == 'live' || status == 'final' || status == 'cancelled') return true;
     if (kickoffTime == null) return false;
     return DateTime.now().isAfter(kickoffTime!);
+  }
+
+  /// True for knockout rounds including 3rd place and Final.
+  bool get isKnockout {
+    final r = round;
+    return r == 'R32' || r == 'R16' || r == 'QF' || r == 'SF' ||
+        r == '3rd' || r == 'Final';
+  }
+
+  /// True for rounds where users can apply a manual booster (R32/R16/QF/SF).
+  bool get isBoosterRound {
+    final r = round;
+    return r == 'R32' || r == 'R16' || r == 'QF' || r == 'SF';
+  }
+
+  /// Auto-multiplier applied regardless of user action: 5 for 3rd, 6 for Final.
+  int get autoMultiplier {
+    if (round == '3rd')   return 5;
+    if (round == 'Final') return 6;
+    return 1;
+  }
+
+  /// Maximum booster multiplier for this round (R32=2, R16=3, QF=4, SF=5, else 1).
+  int get boosterMultiplier {
+    switch (round) {
+      case 'R32':   return 2;
+      case 'R16':   return 3;
+      case 'QF':    return 4;
+      case 'SF':    return 5;
+      default:      return 1;
+    }
   }
 
   factory MatchModel.fromJson(Map<String, dynamic> json) {
@@ -79,6 +115,8 @@ class MatchModel {
           : null,
       team1: parseTeam(json['team1']),
       team2: parseTeam(json['team2']),
+      formationTeam1: json['formation_team1'] as String?,
+      formationTeam2: json['formation_team2'] as String?,
     );
   }
 
@@ -99,5 +137,7 @@ class MatchModel {
         'score_pen_team1': scorePenTeam1,
         'score_pen_team2': scorePenTeam2,
         'updated_at': updatedAt?.toIso8601String(),
+        'formation_team1': formationTeam1,
+        'formation_team2': formationTeam2,
       };
 }

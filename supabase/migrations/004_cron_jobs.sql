@@ -1,3 +1,11 @@
+-- pg_cron and pg_net are preloaded by the Supabase postgres image but
+-- the extensions themselves still need to be created. On hosted Supabase
+-- they are enabled via the dashboard; locally we create them here.
+-- IF NOT EXISTS makes this safe to re-apply against a remote that
+-- already has the extensions.
+create extension if not exists pg_net  with schema extensions;
+create extension if not exists pg_cron with schema extensions;
+
 -- ============================================================
 -- WC2026 Prediction App — pg_cron schedules
 -- Migration 004

@@ -1,6 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
-        android:label="wcpredict"
+        android:label="WC Predict"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
@@ -20,12 +21,19 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
-            <!-- Deep link handler for Supabase magic-link auth -->
-            <intent-filter android:autoVerify="true">
+            <!-- Custom scheme (local dev fallback) -->
+            <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="wcpredict" android:host="auth" android:pathPrefix="/callback" />
+            </intent-filter>
+            <!-- HTTPS App Links — OS intercepts before browser renders; no redirect issue -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="${appLinkDomain}" android:pathPrefix="/auth/callback" />
             </intent-filter>
         </activity>
         <meta-data

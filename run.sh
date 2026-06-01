@@ -26,8 +26,10 @@ done
 
 # Rebuild arg list cleanly
 ARGS=("$MODE"
-  "--dart-define=SUPABASE_URL=$SUPABASE_URL"
-  "--dart-define=SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY"
+    "--dart-define=SUPABASE_URL=$SUPABASE_URL"
+    "--dart-define=SUPABASE_ANON_KEY=$SUPABASE_ANON_KEY"
+    "--dart-define=GOOGLE_SERVER_CLIENT_ID=${GOOGLE_SERVER_CLIENT_ID:-}"
+    "--dart-define=IOS_REVERSED_CLIENT_ID=${IOS_REVERSED_CLIENT_ID:-}"
 )
 [ -n "$DEVICE" ] && ARGS+=(-d "$DEVICE")
 

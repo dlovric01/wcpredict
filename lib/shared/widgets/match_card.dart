@@ -1,61 +1,41 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:wcpredict/core/models/match_model.dart';
-import 'package:wcpredict/core/models/prediction_model.dart';
-import 'package:wcpredict/shared/widgets/team_flag.dart';
 import 'package:wcpredict/core/models/team_model.dart';
+import 'package:wcpredict/core/theme/app_colors.dart';
+import 'package:wcpredict/core/theme/app_radii.dart';
+import 'package:wcpredict/shared/widgets/team_flag.dart';
 
 class MatchCard extends StatelessWidget {
   const MatchCard({
     super.key,
     required this.match,
-    this.myPrediction,
+    this.onTap,
   });
 
   final MatchModel match;
-  final PredictionModel? myPrediction;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final cs = theme.colorScheme;
-    final isLive = match.status == 'live';
-    final isFinal = match.status == 'final';
-
     return Card(
-      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      color: AppColors.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: AppRadii.cardRadius,
+        side: const BorderSide(color: AppColors.outline, width: 1),
+      ),
+      margin: EdgeInsets.zero,
+      clipBehavior: Clip.antiAlias,
       child: InkWell(
-        borderRadius: BorderRadius.circular(12),
-        onTap: null, // navigation handled by parent via GoRouter
+        borderRadius: AppRadii.cardRadius,
+        onTap: onTap,
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          child: Row(
             children: [
-              Row(
-                children: [
-                  // Team 1
-                  Expanded(
-                    child: _TeamSide(
-                      team: match.team1,
-                      align: CrossAxisAlignment.start,
-                    ),
-                  ),
-                  // Centre: score / time + status badge
-                  _CentreScore(match: match, isLive: isLive, isFinal: isFinal),
-                  // Team 2
-                  Expanded(
-                    child: _TeamSide(
-                      team: match.team2,
-                      align: CrossAxisAlignment.end,
-                    ),
-                  ),
-                ],
-              ),
-              if (myPrediction != null) ...[
-                const SizedBox(height: 6),
-                _PredictionRow(prediction: myPrediction!, colorScheme: cs),
-              ],
+              _TeamSide(team: match.team1, alignLeft: true),
+              _CentreScore(match: match),
+              _TeamSide(team: match.team2, alignLeft: false),
             ],
           ),
         ),
@@ -67,29 +47,39 @@ class MatchCard extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _TeamSide extends StatelessWidget {
-  const _TeamSide({required this.team, required this.align});
+  const _TeamSide({required this.team, required this.alignLeft});
 
   final TeamModel? team;
-  final CrossAxisAlignment align;
+  final bool alignLeft;
 
   @override
   Widget build(BuildContext context) {
-    final t = team;
-    if (t == null) {
-      return const SizedBox.shrink();
-    }
-    final isStart = align == CrossAxisAlignment.start;
-    return Column(
-      crossAxisAlignment: align,
-      children: [
-        TeamFlag(team: t, size: 36),
-        const SizedBox(height: 4),
-        Text(
-          t.code,
-          textAlign: isStart ? TextAlign.left : TextAlign.right,
-          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-        ),
-      ],
+    final cross =
+        alignLeft ? CrossAxisAlignment.start : CrossAxisAlignment.end;
+    final align = alignLeft ? TextAlign.left : TextAlign.right;
+    return Expanded(
+      child: Column(
+        crossAxisAlignment: cross,
+        children: [
+          TeamFlag(team: team, tbd: team == null, size: 28),
+          const SizedBox(height: 4),
+          Text(
+            team?.code ?? '?',
+            textAlign: align,
+            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
+                  fontFeatures: const [FontFeature.tabularFigures()],
+                ),
+          ),
+          Text(
+            team?.name ?? 'TBD',
+            textAlign: align,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: AppColors.onSurfaceVariant,
+                ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -97,22 +87,21 @@ class _TeamSide extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _CentreScore extends StatelessWidget {
-  const _CentreScore({
-    required this.match,
-    required this.isLive,
-    required this.isFinal,
-  });
+  const _CentreScore({required this.match});
 
   final MatchModel match;
-  final bool isLive;
-  final bool isFinal;
+
+  static const _tabular = [FontFeature.tabularFigures()];
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
+    final isLive = match.status == 'live';
+    final isFinal = match.status == 'final';
+    final isLocked = match.isLocked && !isLive && !isFinal;
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -120,56 +109,49 @@ class _CentreScore extends StatelessWidget {
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                _LiveDot(),
+                const _LiveDot(),
                 const SizedBox(width: 4),
                 Text(
-                  '${match.scoreFtTeam1 ?? 0} – ${match.scoreFtTeam2 ?? 0}',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
-                    color: cs.primary,
-                  ),
+                  'LIVE',
+                  style: tt.labelSmall?.copyWith(color: AppColors.live),
                 ),
               ],
             ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-              decoration: BoxDecoration(
-                color: Colors.green.shade700,
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: const Text(
-                'LIVE',
-                style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold),
-              ),
+            const SizedBox(height: 2),
+            Text(
+              '${match.scoreFtTeam1 ?? 0}\u2013${match.scoreFtTeam2 ?? 0}',
+              style: tt.displaySmall?.copyWith(fontFeatures: _tabular),
             ),
           ] else if (isFinal) ...[
             Text(
-              '${match.scoreFtTeam1 ?? 0} – ${match.scoreFtTeam2 ?? 0}',
-              style: const TextStyle(
-                  fontSize: 18, fontWeight: FontWeight.w800),
+              '${match.scoreFtTeam1 ?? 0}\u2013${match.scoreFtTeam2 ?? 0}',
+              style: tt.displaySmall?.copyWith(fontFeatures: _tabular),
             ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-              decoration: BoxDecoration(
-                color: cs.surfaceContainerHighest,
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: Text(
-                'FT',
-                style: TextStyle(
-                    color: cs.onSurfaceVariant,
-                    fontSize: 10,
-                    fontWeight: FontWeight.bold),
+            const SizedBox(height: 2),
+            Text(
+              'FT',
+              style: tt.labelSmall?.copyWith(color: AppColors.onSurfaceVariant),
+            ),
+          ] else if (isLocked) ...[
+            Text(
+              'vs',
+              style: tt.headlineMedium?.copyWith(
+                color: AppColors.onSurfaceVariant,
               ),
             ),
+            const SizedBox(height: 2),
+            const Icon(Icons.lock, size: 14, color: AppColors.locked),
           ] else ...[
             Text(
-              _formatKickoff(match.kickoffTime ?? DateTime.now()),
-              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+              'vs',
+              style: tt.headlineMedium?.copyWith(
+                color: AppColors.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              _formatKickoff(match.kickoffTime),
+              style: tt.bodySmall?.copyWith(color: AppColors.onSurfaceVariant),
             ),
           ],
         ],
@@ -177,38 +159,37 @@ class _CentreScore extends StatelessWidget {
     );
   }
 
-  String _formatKickoff(DateTime kickoff) {
-    final now = DateTime.now();
+  static String _formatKickoff(DateTime? kickoff) {
+    if (kickoff == null) return '--:--';
     final local = kickoff.toLocal();
+    final now = DateTime.now();
     final isToday = local.year == now.year &&
         local.month == now.month &&
         local.day == now.day;
-    final timeStr = DateFormat('HH:mm').format(local);
-    if (isToday) return 'Today $timeStr';
-    return DateFormat('dd MMM HH:mm').format(local);
+    if (isToday) return DateFormat('HH:mm').format(local);
+    return DateFormat('d MMM · HH:mm').format(local);
   }
 }
 
 // ---------------------------------------------------------------------------
 
 class _LiveDot extends StatefulWidget {
+  const _LiveDot();
+
   @override
   State<_LiveDot> createState() => _LiveDotState();
 }
 
-class _LiveDotState extends State<_LiveDot>
-    with SingleTickerProviderStateMixin {
+class _LiveDotState extends State<_LiveDot> with SingleTickerProviderStateMixin {
   late final AnimationController _ctrl;
-  late final Animation<double> _anim;
 
   @override
   void initState() {
     super.initState();
     _ctrl = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 900),
+      duration: const Duration(milliseconds: 800),
     )..repeat(reverse: true);
-    _anim = Tween<double>(begin: 0.3, end: 1.0).animate(_ctrl);
   }
 
   @override
@@ -219,64 +200,16 @@ class _LiveDotState extends State<_LiveDot>
 
   @override
   Widget build(BuildContext context) {
-    return FadeTransition(
-      opacity: _anim,
-      child: Container(
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (_, __) => Container(
         width: 8,
         height: 8,
-        decoration: const BoxDecoration(
-          color: Colors.green,
+        decoration: BoxDecoration(
+          color: AppColors.live.withValues(alpha: 0.5 + 0.5 * _ctrl.value),
           shape: BoxShape.circle,
         ),
       ),
-    );
-  }
-}
-
-// ---------------------------------------------------------------------------
-
-class _PredictionRow extends StatelessWidget {
-  const _PredictionRow({
-    required this.prediction,
-    required this.colorScheme,
-  });
-
-  final PredictionModel prediction;
-  final ColorScheme colorScheme;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Icon(Icons.sports_soccer, size: 12, color: colorScheme.primary),
-        const SizedBox(width: 4),
-        Text(
-          'Your pick: ${prediction.predictedTeam1} – ${prediction.predictedTeam2}',
-          style: TextStyle(
-            fontSize: 11,
-            color: colorScheme.onSurfaceVariant,
-          ),
-        ),
-        if (prediction.pointsEarned != null) ...[
-          const SizedBox(width: 6),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-            decoration: BoxDecoration(
-              color: colorScheme.primaryContainer,
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: Text(
-              '+${prediction.pointsEarned}',
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.bold,
-                color: colorScheme.onPrimaryContainer,
-              ),
-            ),
-          ),
-        ],
-      ],
     );
   }
 }

@@ -22,17 +22,17 @@ Deno.serve(async (req) => {
 
     const ids = kickedOff.map((m: any) => m.id);
 
-    const { count, error: lockErr } = await supabaseAdmin
+    const { data: lockedRows, error: lockErr } = await supabaseAdmin
       .from('predictions')
       .update({ locked_at: now })
       .in('match_id', ids)
       .is('locked_at', null)
-      .select('id', { count: 'exact', head: true });
+      .select('id');
 
     if (lockErr) throw new Error(lockErr.message);
 
     return new Response(
-      JSON.stringify({ ok: true, locked: count ?? 0 }),
+      JSON.stringify({ ok: true, locked: lockedRows?.length ?? 0 }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   } catch (err) {

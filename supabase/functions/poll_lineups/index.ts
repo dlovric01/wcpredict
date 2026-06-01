@@ -20,8 +20,12 @@ Deno.serve(async (req) => {
 
   try {
     const now = new Date();
-    const windowStart = new Date(now.getTime() + 25 * 60 * 1000).toISOString();
-    const windowEnd   = new Date(now.getTime() + 35 * 60 * 1000).toISOString();
+
+    // Window: matches kicking off between now+5 min and now+55 min.
+    // Wide enough to retry every minute for ~50 minutes; lineups are typically
+    // confirmed by T-60 so T-55 is the earliest useful attempt.
+    const windowStart = new Date(now.getTime() +  5 * 60 * 1000).toISOString();
+    const windowEnd   = new Date(now.getTime() + 55 * 60 * 1000).toISOString();
 
     const { data: upcoming } = await supabaseAdmin
       .from('matches')
@@ -37,19 +41,39 @@ Deno.serve(async (req) => {
 
     const key = apiKey();
     let playersUpserted = 0;
+    let matchesPopulated = 0;
 
     for (const match of upcoming) {
+      // Guard: if both teams already have starting-XI players with grid positions,
+      // the lineup for this match is already populated — skip to save API quota.
+      const { count } = await supabaseAdmin
+        .from('players')
+        .select('id', { count: 'exact', head: true })
+        .in('team_id', [match.team1_id, match.team2_id].filter(Boolean))
+        .eq('is_starter', true)
+        .not('grid', 'is', null);
+
+      if ((count ?? 0) >= 18) {
+        // Both XIs already stored (11 × 2 = 22 minimum, 18 is a safe threshold)
+        continue;
+      }
+
       const res = await fetch(`${BASE}/fixtures/lineups?fixture=${match.id}`, {
         headers: { 'x-apisports-key': key },
       });
       if (!res.ok) continue;
       const json = await res.json();
-      const lineups = json.response as any[];
+      const lineups = (json.response ?? []) as any[];
+      if (lineups.length === 0) continue; // not confirmed yet — retry next minute
 
       const playerRows: object[] = [];
+      const formations: Record<number, string> = {};
+
       for (const lineup of lineups) {
         const teamId = lineup.team.id;
-        for (const entry of [...lineup.startXI, ...lineup.substitutes]) {
+        if (lineup.formation) formations[teamId] = lineup.formation;
+
+        for (const entry of lineup.startXI ?? []) {
           const p = entry.player;
           if (!p?.id) continue;
           playerRows.push({
@@ -58,6 +82,22 @@ Deno.serve(async (req) => {
             name: p.name,
             position: mapPos(p.pos),
             jersey_number: p.number ?? null,
+            grid: p.grid ?? null,
+            is_starter: true,
+          });
+        }
+
+        for (const entry of lineup.substitutes ?? []) {
+          const p = entry.player;
+          if (!p?.id) continue;
+          playerRows.push({
+            id: p.id,
+            team_id: teamId,
+            name: p.name,
+            position: mapPos(p.pos),
+            jersey_number: p.number ?? null,
+            grid: null,
+            is_starter: false,
           });
         }
       }
@@ -68,10 +108,26 @@ Deno.serve(async (req) => {
           .upsert(playerRows, { onConflict: 'id', ignoreDuplicates: false });
         if (!error) playersUpserted += playerRows.length;
       }
+
+      // Store formations on the match row so the pitch UI can display them.
+      if (Object.keys(formations).length > 0) {
+        const formationUpdate: Record<string, string> = {};
+        if (match.team1_id && formations[match.team1_id]) {
+          formationUpdate['formation_team1'] = formations[match.team1_id];
+        }
+        if (match.team2_id && formations[match.team2_id]) {
+          formationUpdate['formation_team2'] = formations[match.team2_id];
+        }
+        if (Object.keys(formationUpdate).length > 0) {
+          await supabaseAdmin.from('matches').update(formationUpdate).eq('id', match.id);
+        }
+      }
+
+      matchesPopulated++;
     }
 
     return new Response(
-      JSON.stringify({ ok: true, matches: upcoming.length, players_upserted: playersUpserted }),
+      JSON.stringify({ ok: true, matches: upcoming.length, matches_populated: matchesPopulated, players_upserted: playersUpserted }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   } catch (err) {

@@ -44,3 +44,18 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 .env
+
+# Local-only editor settings
+.vscode/
+
+# Android Gradle build outputs (in addition to /build at repo root)
+/android/build/
+/android/.gradle/
+/android/app/build/
+
+# Supabase CLI local state (project link, container versions, temp eszip)
+supabase/.temp/
+supabase/.branches/
+
+# Stale debug screenshot
+flutter_01.png

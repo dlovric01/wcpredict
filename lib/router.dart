@@ -3,18 +3,21 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import 'core/route_observer.dart';
+import 'core/supabase_client.dart';
+import 'router_redirect.dart';
 import 'features/auth/auth_callback_screen.dart';
-import 'features/auth/magic_link_screen.dart';
-import 'features/bracket/bracket_screen.dart';
-import 'features/fixtures/fixtures_screen.dart';
-import 'features/groups/create_group_screen.dart';
+import 'features/auth/social_sign_in_screen.dart';
+import 'features/dev/simulation_screen.dart';
 import 'features/groups/group_detail_screen.dart';
 import 'features/groups/groups_list_screen.dart';
-import 'features/groups/join_group_screen.dart';
-import 'features/home/home_screen.dart';
+import 'features/groups/user_predictions_screen.dart';
+import 'features/live/live_screen.dart';
 import 'features/matches/match_detail_screen.dart';
+import 'features/matches/matches_list_screen.dart';
 import 'features/profile/profile_screen.dart';
-import 'core/supabase_client.dart';
+import 'features/tournament/tournament_predictions_screen.dart';
+import 'shared/widgets/app_shell.dart';
 
 /// Bridges a [Stream] to a [Listenable] for [GoRouter.refreshListenable].
 class GoRouterRefreshStream extends ChangeNotifier {
@@ -32,74 +35,107 @@ class GoRouterRefreshStream extends ChangeNotifier {
   }
 }
 
-final _publicRoutes = {'/sign-in', '/auth/callback'};
+// _publicRoutes + redirect logic live in router_redirect.dart for testability.
 
 final appRouter = GoRouter(
-  initialLocation: '/',
+  initialLocation: '/matches',
+  observers: [AppRouteObserver()],
   refreshListenable: GoRouterRefreshStream(
     supabase.auth.onAuthStateChange,
   ),
-  redirect: (BuildContext context, GoRouterState state) {
-    final loggedIn = supabase.auth.currentUser != null;
-    final loc = state.matchedLocation;
-
-    if (!loggedIn && !_publicRoutes.contains(loc)) return '/sign-in';
-    if (loggedIn && loc == '/sign-in') return '/home';
-    if (loc == '/') return loggedIn ? '/home' : '/sign-in';
-    return null;
-  },
+  redirect: (BuildContext context, GoRouterState state) => computeAuthRedirect(
+    loggedIn: supabase.auth.currentUser != null,
+    location: state.matchedLocation,
+  ),
   routes: [
+    // ── Public routes (outside the shell) ───────────────────────────────────
     GoRoute(
       path: '/',
       builder: (_, __) => const SizedBox.shrink(),
     ),
     GoRoute(
       path: '/sign-in',
-      builder: (_, __) => const MagicLinkScreen(),
+      builder: (_, __) => const SocialSignInScreen(),
     ),
     GoRoute(
       path: '/auth/callback',
       builder: (_, __) => const AuthCallbackScreen(),
     ),
-    GoRoute(
-      path: '/home',
-      builder: (_, __) => const HomeScreen(),
-    ),
-    GoRoute(
-      path: '/groups',
-      builder: (_, __) => const GroupsListScreen(),
-      routes: [
-        GoRoute(
-          path: 'create',
-          builder: (_, __) => const CreateGroupScreen(),
-        ),
-        GoRoute(
-          path: 'join',
-          builder: (_, __) => const JoinGroupScreen(),
-        ),
-        GoRoute(
-          path: ':groupId',
-          builder: (_, state) =>
-              GroupDetailScreen(groupId: state.pathParameters['groupId']!),
-        ),
-      ],
-    ),
-    GoRoute(
-      path: '/fixtures',
-      builder: (_, __) => const FixturesScreen(),
-    ),
+
+    // ── Detail routes (above the shell, with back button) ───────────────────
     GoRoute(
       path: '/matches/:matchId',
       builder: (_, state) =>
           MatchDetailScreen(matchId: int.parse(state.pathParameters['matchId']!)),
     ),
     GoRoute(
-      path: '/bracket',
-      builder: (_, __) => const BracketScreen(),
+      path: '/dev/simulate',
+      builder: (_, __) => const SimulationScreen(),
     ),
     GoRoute(
-      path: '/profile',
-      builder: (_, __) => const ProfileScreen(),
+      path: '/tournament',
+      builder: (_, __) => const TournamentPredictionsScreen(),
+    ),
+    GoRoute(
+      path: '/groups/:groupId',
+      builder: (_, state) =>
+          GroupDetailScreen(groupId: state.pathParameters['groupId']!),
+    ),
+    GoRoute(
+      path: '/members/:userId',
+      builder: (_, state) {
+        final extra = state.extra as Map<String, dynamic>;
+        return UserPredictionsScreen(
+          userId: state.pathParameters['userId']!,
+          displayName: extra['displayName'] as String,
+          totalPoints: extra['totalPoints'] as int,
+          exactCount: extra['exactCount'] as int,
+          outcomeCount: extra['outcomeCount'] as int? ?? 0,
+          goalDiffCount: extra['goalDiffCount'] as int? ?? 0,
+          scorerCount: extra['scorerCount'] as int? ?? 0,
+          firstTeamCount: extra['firstTeamCount'] as int? ?? 0,
+        );
+      },
+    ),
+
+    // ── Shell with persistent bottom nav ────────────────────────────────────
+    StatefulShellRoute.indexedStack(
+      builder: (context, state, navigationShell) =>
+          AppShell(navigationShell: navigationShell),
+      branches: [
+        StatefulShellBranch(
+          routes: [
+            GoRoute(
+              path: '/matches',
+              builder: (_, __) => const MatchesListScreen(),
+            ),
+          ],
+        ),
+        StatefulShellBranch(
+          routes: [
+            GoRoute(
+              path: '/live',
+              builder: (_, __) => const LiveScreen(),
+            ),
+          ],
+        ),
+        StatefulShellBranch(
+          routes: [
+            GoRoute(
+              path: '/groups',
+              builder: (_, __) => const GroupsListScreen(),
+            ),
+          ],
+        ),
+        StatefulShellBranch(
+          routes: [
+            GoRoute(
+              path: '/profile',
+              builder: (_, __) => const ProfileScreen(),
+            ),
+          ],
+        ),
+      ],
     ),
   ],
 );
