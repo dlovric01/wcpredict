@@ -10,7 +10,6 @@ import 'package:wcpredict/core/theme/app_radii.dart';
 import 'package:wcpredict/shared/providers/matches_provider.dart';
 import 'package:wcpredict/shared/providers/predictions_provider.dart';
 import 'package:wcpredict/shared/widgets/team_flag.dart';
-import 'package:wcpredict/shared/widgets/live_minute_text.dart';
 import 'package:wcpredict/features/matches/tournament_achievement_banner.dart';
 
 class MatchesListScreen extends ConsumerWidget {
@@ -28,6 +27,10 @@ class MatchesListScreen extends ConsumerWidget {
         title: const Text('Matches'),
       ),
       body: matchesAsync.when(
+        // Ticker fires on every matches-table change; we don't want the
+        // list to flash a spinner over the existing data every time a
+        // status / score row updates.
+        skipLoadingOnReload: true,
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(
           child: Text(
@@ -368,8 +371,6 @@ class _MatchCard extends StatelessWidget {
                   isLive: isLive,
                   needsPrediction: needsPrediction,
                   hasPrediction: hasPrediction,
-                  kickoff: match.kickoffTime,
-                  status: match.status,
                 ),
               ],
             ),
@@ -462,15 +463,26 @@ class _TeamsBlock extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final showScore = isLive || isFinal;
-    final scoreText = showScore
-        ? '${match.scoreFtTeam1 ?? 0}–${match.scoreFtTeam2 ?? 0}'
-        : 'vs';
+    // During play we hide the running score and just show the LIVE pill;
+    // a half-time score reveals as "HT 1-0". The big final score only
+    // appears once the match is in `final` status (and we promote ET /
+    // PEN ahead of FT when the knockout went past 90).
+    final String scoreText;
+    final bool showScore;
+    if (isFinal) {
+      scoreText = _finalScoreLabel(match);
+      showScore = true;
+    } else if (isLive && match.scoreHtTeam1 != null && match.scoreHtTeam2 != null) {
+      scoreText = 'HT ${match.scoreHtTeam1}–${match.scoreHtTeam2}';
+      showScore = true;
+    } else {
+      scoreText = 'vs';
+      showScore = false;
+    }
 
     final separatorColor = isLive
         ? AppColors.live
         : (isFinal ? AppColors.onSurface : AppColors.onSurfaceMuted);
-
     return Row(
       children: [
         Expanded(
@@ -541,15 +553,11 @@ class _Action extends StatelessWidget {
     required this.isLive,
     required this.needsPrediction,
     required this.hasPrediction,
-    required this.kickoff,
-    required this.status,
   });
 
   final bool isLive;
   final bool needsPrediction;
   final bool hasPrediction;
-  final DateTime? kickoff;
-  final String? status;
 
   @override
   Widget build(BuildContext context) {
@@ -579,17 +587,6 @@ class _Action extends StatelessWidget {
                 fontSize: 11,
                 fontWeight: FontWeight.w800,
                 letterSpacing: 0.5,
-              ),
-            ),
-            const SizedBox(width: 6),
-            LiveMinuteText(
-              kickoff: kickoff,
-              status: status,
-              style: const TextStyle(
-                color: AppColors.live,
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-                fontFeatures: [FontFeature.tabularFigures()],
               ),
             ),
           ],
@@ -623,4 +620,23 @@ class _Action extends StatelessWidget {
     }
     return const SizedBox(width: 0);
   }
+}
+
+/// Human-readable score for a match that's reached `final` status.
+///
+/// Rules:
+/// - Penalties: render `(p) X–Y` to flag the shootout result.
+/// - Extra time: render `(et) X–Y` using the post-ET score.
+/// - Otherwise: the standard 90-minute full-time score.
+///
+/// Stays compact for the list-card centre column; the detail-screen
+/// hero gets a richer multi-line presentation in match_detail_screen.
+String _finalScoreLabel(MatchModel m) {
+  if (m.scorePenTeam1 != null && m.scorePenTeam2 != null) {
+    return '(p) ${m.scorePenTeam1}–${m.scorePenTeam2}';
+  }
+  if (m.scoreEtTeam1 != null && m.scoreEtTeam2 != null) {
+    return '(et) ${m.scoreEtTeam1}–${m.scoreEtTeam2}';
+  }
+  return '${m.scoreFtTeam1 ?? 0}–${m.scoreFtTeam2 ?? 0}';
 }

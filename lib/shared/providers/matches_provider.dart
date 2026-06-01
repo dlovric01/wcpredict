@@ -35,7 +35,6 @@ final allMatchesProvider = FutureProvider<List<MatchModel>>((ref) async {
       .map((e) => MatchModel.fromJson(e as Map<String, dynamic>))
       .toList();
 });
-
 /// Up to 5 upcoming scheduled matches the current user hasn't predicted yet.
 final upcomingUnpredictedProvider = FutureProvider<List<MatchModel>>((ref) async {
   ref.watch(matchesChangeTickerProvider);

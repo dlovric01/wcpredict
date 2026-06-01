@@ -4,10 +4,12 @@ class PlayerModel {
   final String name;
   final String? position;
   final int? jerseyNumber;
+
   /// API-Football grid position within the formation, e.g. "2:3" (row:col).
   /// Row 1 = goalkeeper. Higher rows = more attacking.
   /// Null for substitutes or when lineup hasn't been fetched yet.
   final String? grid;
+
   /// True if this player is in the starting XI; false = named substitute.
   final bool isStarter;
 
@@ -42,4 +44,23 @@ class PlayerModel {
         'grid': grid,
         'is_starter': isStarter,
       };
+
+  // Value equality so Riverpod `.select` and ListView keys can dedupe
+  // unchanged rows. Without this, every refetch produces fresh
+  // instances and every dependent widget rebuilds.
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PlayerModel &&
+          id == other.id &&
+          teamId == other.teamId &&
+          name == other.name &&
+          position == other.position &&
+          jerseyNumber == other.jerseyNumber &&
+          grid == other.grid &&
+          isStarter == other.isStarter;
+
+  @override
+  int get hashCode =>
+      Object.hash(id, teamId, name, position, jerseyNumber, grid, isStarter);
 }

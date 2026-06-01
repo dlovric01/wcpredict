@@ -18,7 +18,6 @@ import 'package:wcpredict/features/matches/live_events_widget.dart';
 import 'package:wcpredict/shared/providers/match_detail_provider.dart';
 import 'package:wcpredict/shared/providers/predictions_provider.dart';
 import 'package:wcpredict/shared/widgets/team_flag.dart';
-import 'package:wcpredict/shared/widgets/live_minute_text.dart';
 import 'package:wcpredict/shared/widgets/verdict_pill.dart';
 import 'package:wcpredict/shared/providers/boosters_provider.dart';
 import 'package:wcpredict/shared/widgets/app_sheet.dart';
@@ -84,6 +83,10 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen>
         elevation: 0,
       ),
       body: matchAsync.when(
+        // matchByIdProvider re-fetches whenever the matches table changes
+        // (status / score updates). Keep the existing screen visible
+        // during the reload instead of flashing a spinner.
+        skipLoadingOnReload: true,
         loading: () => const Center(
           child: CircularProgressIndicator(color: AppColors.primary),
         ),
@@ -168,7 +171,27 @@ class _HeroScoreCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final isFinalOrLive = match.status == 'final' || match.status == 'live';
+    // Merge realtime row over the cached match so status / scores
+    // flip without refetching the whole join.
+    final status = (liveOverride?['status'] as String?) ?? match.status;
+    final ftA = (liveOverride?['score_ft_team1'] as num?)?.toInt() ?? match.scoreFtTeam1;
+    final ftB = (liveOverride?['score_ft_team2'] as num?)?.toInt() ?? match.scoreFtTeam2;
+    final htA = (liveOverride?['score_ht_team1'] as num?)?.toInt() ?? match.scoreHtTeam1;
+    final htB = (liveOverride?['score_ht_team2'] as num?)?.toInt() ?? match.scoreHtTeam2;
+    final etA = (liveOverride?['score_et_team1'] as num?)?.toInt() ?? match.scoreEtTeam1;
+    final etB = (liveOverride?['score_et_team2'] as num?)?.toInt() ?? match.scoreEtTeam2;
+    final penA = (liveOverride?['score_pen_team1'] as num?)?.toInt() ?? match.scorePenTeam1;
+    final penB = (liveOverride?['score_pen_team2'] as num?)?.toInt() ?? match.scorePenTeam2;
+
+    final isLive = status == 'live';
+    final isFinal = status == 'final';
+    // Reveal HT once both halves are populated, regardless of status.
+    final hasHt = htA != null && htB != null;
+    final hasEt = etA != null && etB != null;
+    final hasPen = penA != null && penB != null;
+    // During play we deliberately suppress the running score; the only
+    // score that may appear before FT is the half-time number.
+    final showFinalScore = isFinal;
 
     return Container(
       decoration: const BoxDecoration(
@@ -189,22 +212,30 @@ class _HeroScoreCard extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  if (isFinalOrLive) ...[
-                    _StatusChip(match: match),
+                  if (isLive || isFinal) ...[
+                    _StatusChip(status: status),
                     const SizedBox(height: 8),
                   ],
-                  if (isFinalOrLive)
+                  if (showFinalScore)
                     Text(
-                      '${liveOverride?['score_ft_team1'] ?? match.scoreFtTeam1 ?? 0}'
-                      '–'
-                      '${liveOverride?['score_ft_team2'] ?? match.scoreFtTeam2 ?? 0}',
+                      '${ftA ?? 0}–${ftB ?? 0}',
                       style: theme.textTheme.displayMedium?.copyWith(
                         color: AppColors.onSurface,
                         fontFeatures: const [FontFeature.tabularFigures()],
                         fontWeight: FontWeight.w700,
                       ),
                     )
-                  else
+                  else if (isLive && hasHt)
+                    // Half-time score during the break / second half.
+                    Text(
+                      'HT $htA–$htB',
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        color: AppColors.onSurface,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                        fontWeight: FontWeight.w800,
+                      ),
+                    )
+                  else if (!isLive && !isFinal)
                     Text(
                       match.kickoffTime != null
                           ? DateFormat('d MMM\nHH:mm')
@@ -215,14 +246,36 @@ class _HeroScoreCard extends StatelessWidget {
                       ),
                       textAlign: TextAlign.center,
                     ),
-                  if (isFinalOrLive &&
-                      match.scoreHtTeam1 != null &&
-                      match.scoreHtTeam2 != null) ...[
+                  // Sub-labels visible after FT:
+                  //   HT 0-1            — half-time score
+                  //   ET 2-2            — score after extra time, if played
+                  //   PEN 5-4           — penalty shootout result, if played
+                  if (showFinalScore && hasHt) ...[
                     const SizedBox(height: 2),
                     Text(
-                      'HT ${match.scoreHtTeam1}–${match.scoreHtTeam2}',
+                      'HT $htA–$htB',
                       style: theme.textTheme.labelSmall?.copyWith(
                         color: AppColors.onSurfaceMuted,
+                      ),
+                    ),
+                  ],
+                  if (showFinalScore && hasEt) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      'ET $etA–$etB',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: AppColors.secondary,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                  if (showFinalScore && hasPen) ...[
+                    const SizedBox(height: 2),
+                    Text(
+                      'PEN $penA–$penB',
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: AppColors.secondary,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
                   ],
@@ -278,15 +331,15 @@ class _TeamSide extends StatelessWidget {
 }
 
 class _StatusChip extends StatelessWidget {
-  const _StatusChip({required this.match});
-  final MatchModel match;
+  const _StatusChip({required this.status});
+  final String? status;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
-    return switch (match.status) {
-      'live' => _LiveChip(match: match),
+    return switch (status) {
+      'live' => _LiveChip(),
       'final' => Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           decoration: BoxDecoration(
@@ -295,7 +348,7 @@ class _StatusChip extends StatelessWidget {
             border: Border.all(color: AppColors.outline),
           ),
           child: Text(
-            'FINAL',
+            'FT',
             style: theme.textTheme.labelSmall?.copyWith(
               color: AppColors.onSurfaceVariant,
               fontWeight: FontWeight.w800,
@@ -310,9 +363,6 @@ class _StatusChip extends StatelessWidget {
 }
 
 class _LiveChip extends StatefulWidget {
-  const _LiveChip({required this.match});
-  final MatchModel match;
-
   @override
   State<_LiveChip> createState() => _LiveChipState();
 }
@@ -371,16 +421,6 @@ class _LiveChipState extends State<_LiveChip>
               letterSpacing: 0.5,
             ),
           ),
-          const SizedBox(width: 6),
-          LiveMinuteText(
-            kickoff: widget.match.kickoffTime,
-            status: widget.match.status,
-            style: theme.textTheme.labelSmall?.copyWith(
-              color: AppColors.live,
-              fontWeight: FontWeight.w700,
-              fontFeatures: const [FontFeature.tabularFigures()],
-            ),
-          ),
         ],
       ),
     );
@@ -406,7 +446,7 @@ class _OverviewTab extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final isFinalOrLive = match.status == 'final' || match.status == 'live';
+    final isFinal = match.status == 'final';
 
     return RefreshIndicator(
       color: AppColors.primary,
@@ -418,7 +458,10 @@ class _OverviewTab extends ConsumerWidget {
       },
       child: ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-        children: isFinalOrLive
+        // Events only reveal after FT. During play we keep the surface
+        // calm — the prediction summary stays put and there's no event
+        // ticker to chase.
+        children: isFinal
             ? [
                 Padding(
                   padding: const EdgeInsets.only(bottom: 8),

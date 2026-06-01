@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart' show listEquals;
+
 import 'player_model.dart';
 
 class TeamModel {
@@ -40,4 +42,28 @@ class TeamModel {
         'flag_url': flagUrl,
         'group_letter': groupLetter,
       };
+
+  // Value equality. `players` uses `listEquals` so a re-fetch that
+  // returns the same lineup compares equal even though the inner List
+  // is a new instance.
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is TeamModel &&
+          id == other.id &&
+          name == other.name &&
+          code == other.code &&
+          flagUrl == other.flagUrl &&
+          groupLetter == other.groupLetter &&
+          listEquals(players, other.players);
+
+  @override
+  int get hashCode => Object.hash(
+        id,
+        name,
+        code,
+        flagUrl,
+        groupLetter,
+        players == null ? null : Object.hashAll(players!),
+      );
 }
