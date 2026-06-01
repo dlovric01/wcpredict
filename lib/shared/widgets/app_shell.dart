@@ -56,11 +56,7 @@ class _AppNavBar extends StatelessWidget {
       icon: Icons.calendar_month_outlined,
       selectedIcon: Icons.calendar_month,
     ),
-    _NavItem(
-      label: 'Live',
-      icon: Icons.sensors_outlined,
-      selectedIcon: Icons.sensors,
-    ),
+
     _NavItem(
       label: 'Groups',
       icon: Icons.group_outlined,

@@ -18,6 +18,7 @@ import 'package:wcpredict/features/matches/live_events_widget.dart';
 import 'package:wcpredict/shared/providers/match_detail_provider.dart';
 import 'package:wcpredict/shared/providers/predictions_provider.dart';
 import 'package:wcpredict/shared/widgets/team_flag.dart';
+import 'package:wcpredict/shared/widgets/live_minute_text.dart';
 import 'package:wcpredict/shared/widgets/verdict_pill.dart';
 import 'package:wcpredict/shared/providers/boosters_provider.dart';
 import 'package:wcpredict/shared/widgets/app_sheet.dart';
@@ -285,7 +286,7 @@ class _StatusChip extends StatelessWidget {
     final theme = Theme.of(context);
 
     return switch (match.status) {
-      'live' => _LiveChip(),
+      'live' => _LiveChip(match: match),
       'final' => Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
           decoration: BoxDecoration(
@@ -309,6 +310,9 @@ class _StatusChip extends StatelessWidget {
 }
 
 class _LiveChip extends StatefulWidget {
+  const _LiveChip({required this.match});
+  final MatchModel match;
+
   @override
   State<_LiveChip> createState() => _LiveChipState();
 }
@@ -365,6 +369,16 @@ class _LiveChipState extends State<_LiveChip>
               color: AppColors.live,
               fontWeight: FontWeight.w800,
               letterSpacing: 0.5,
+            ),
+          ),
+          const SizedBox(width: 6),
+          LiveMinuteText(
+            kickoff: widget.match.kickoffTime,
+            status: widget.match.status,
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: AppColors.live,
+              fontWeight: FontWeight.w700,
+              fontFeatures: const [FontFeature.tabularFigures()],
             ),
           ),
         ],

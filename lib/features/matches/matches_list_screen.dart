@@ -10,6 +10,7 @@ import 'package:wcpredict/core/theme/app_radii.dart';
 import 'package:wcpredict/shared/providers/matches_provider.dart';
 import 'package:wcpredict/shared/providers/predictions_provider.dart';
 import 'package:wcpredict/shared/widgets/team_flag.dart';
+import 'package:wcpredict/shared/widgets/live_minute_text.dart';
 import 'package:wcpredict/features/matches/tournament_achievement_banner.dart';
 
 class MatchesListScreen extends ConsumerWidget {
@@ -367,6 +368,8 @@ class _MatchCard extends StatelessWidget {
                   isLive: isLive,
                   needsPrediction: needsPrediction,
                   hasPrediction: hasPrediction,
+                  kickoff: match.kickoffTime,
+                  status: match.status,
                 ),
               ],
             ),
@@ -538,11 +541,15 @@ class _Action extends StatelessWidget {
     required this.isLive,
     required this.needsPrediction,
     required this.hasPrediction,
+    required this.kickoff,
+    required this.status,
   });
 
   final bool isLive;
   final bool needsPrediction;
   final bool hasPrediction;
+  final DateTime? kickoff;
+  final String? status;
 
   @override
   Widget build(BuildContext context) {
@@ -572,6 +579,17 @@ class _Action extends StatelessWidget {
                 fontSize: 11,
                 fontWeight: FontWeight.w800,
                 letterSpacing: 0.5,
+              ),
+            ),
+            const SizedBox(width: 6),
+            LiveMinuteText(
+              kickoff: kickoff,
+              status: status,
+              style: const TextStyle(
+                color: AppColors.live,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                fontFeatures: [FontFeature.tabularFigures()],
               ),
             ),
           ],

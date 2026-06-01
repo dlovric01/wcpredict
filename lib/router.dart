@@ -12,7 +12,6 @@ import 'features/dev/simulation_screen.dart';
 import 'features/groups/group_detail_screen.dart';
 import 'features/groups/groups_list_screen.dart';
 import 'features/groups/user_predictions_screen.dart';
-import 'features/live/live_screen.dart';
 import 'features/matches/match_detail_screen.dart';
 import 'features/matches/matches_list_screen.dart';
 import 'features/profile/profile_screen.dart';
@@ -111,14 +110,7 @@ final appRouter = GoRouter(
             ),
           ],
         ),
-        StatefulShellBranch(
-          routes: [
-            GoRoute(
-              path: '/live',
-              builder: (_, __) => const LiveScreen(),
-            ),
-          ],
-        ),
+
         StatefulShellBranch(
           routes: [
             GoRoute(

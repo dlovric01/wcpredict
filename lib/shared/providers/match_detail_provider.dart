@@ -2,10 +2,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:wcpredict/core/models/match_event_model.dart';
 import 'package:wcpredict/core/models/match_model.dart';
 import 'package:wcpredict/core/supabase_client.dart';
+import 'package:wcpredict/shared/providers/matches_provider.dart'
+    show matchesChangeTickerProvider;
 
 /// Single match by id — joins both teams with their players.
 /// Single match by id — joins both teams with their players.
 final matchByIdProvider = FutureProvider.autoDispose.family<MatchModel, int>((ref, id) async {
+  // Bust the cache whenever any row in `matches` changes — so status
+  // flips (live → final), score ticks, and other writes propagate
+  // without the user having to leave and re-enter the detail screen.
+  ref.watch(matchesChangeTickerProvider);
   final data = await supabase
       .from('matches')
       .select('*, team1:teams!team1_id(*, players(*)), team2:teams!team2_id(*, players(*))')
@@ -50,9 +56,21 @@ final matchEventsStreamProvider =
         .from('match_events')
         .stream(primaryKey: ['id'])
         .eq('match_id', matchId)
-        .order('minute')
-        .map((rows) => rows
-            .map((e) => MatchEventModel.fromJson(e))
-            .toList());
+        .map((rows) {
+          // Sort client-side ascending by minute. The stream's .order()
+          // only applies to the initial fetch; subsequent realtime
+          // upserts append in insertion order, which is wrong for
+          // out-of-order goals (VAR overturns, delayed event ingestion).
+          final events = rows
+              .map(MatchEventModel.fromJson)
+              .toList()
+            ..sort((a, b) {
+              final am = a.minute ?? 0;
+              final bm = b.minute ?? 0;
+              if (am != bm) return am.compareTo(bm);
+              return (a.minuteExtra ?? 0).compareTo(b.minuteExtra ?? 0);
+            });
+          return events;
+        });
   },
 );
