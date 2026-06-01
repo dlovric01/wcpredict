@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show PostgrestException;
 import 'package:wcpredict/core/supabase_client.dart';
 import 'package:wcpredict/core/theme/app_colors.dart';
 import 'package:wcpredict/core/theme/app_spacing.dart';
@@ -55,10 +56,20 @@ class _JoinGroupSheetState extends ConsumerState<_JoinGroupSheet> {
       }
       final group = result.first as Map<String, dynamic>;
       final user = supabase.auth.currentUser!;
-      await supabase.from('group_members').upsert(
-        {'group_id': group['id'], 'user_id': user.id},
-        onConflict: 'group_id,user_id',
-      );
+      try {
+        await supabase.from('group_members').insert({
+          'group_id': group['id'],
+          'user_id': user.id,
+        });
+      } on PostgrestException catch (e) {
+        // Already a member — unique_violation on (group_id, user_id).
+        // Treat as success so a user pasting their own group's code
+        // doesn't see an RLS-flavoured error. We can't .upsert() here:
+        // ON CONFLICT DO UPDATE needs an UPDATE policy on group_members
+        // (there is none — only INSERT for user_id = auth.uid()) and
+        // RLS rejects the update branch.
+        if (e.code != '23505') rethrow;
+      }
       widget.ref.invalidate(myGroupsProvider);
       if (mounted) Navigator.pop(context);
     } catch (e) {
