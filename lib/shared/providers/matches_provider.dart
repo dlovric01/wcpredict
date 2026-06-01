@@ -4,8 +4,27 @@ import 'package:wcpredict/core/models/prediction_model.dart';
 import 'package:wcpredict/core/supabase_client.dart';
 import 'package:wcpredict/shared/providers/auth_provider.dart';
 
+/// Emits whenever the `matches` table changes anywhere in the cluster.
+///
+/// The four list providers below `ref.watch` this so the Matches /
+/// Live / Home tabs refresh themselves the instant a poll_live_matches
+/// run (or any other writer) flips status / score / events on a row.
+/// Without it, FutureProvider lists serve their cached snapshot until
+/// the user pulls to refresh.
+///
+/// `matches` is public data (RLS is read-anyone), so a single stream
+/// covers every user.
+final matchesChangeTickerProvider = StreamProvider<int>((ref) {
+  var tick = 0;
+  return supabase
+      .from('matches')
+      .stream(primaryKey: ['id'])
+      .map((_) => ++tick);
+});
+
 /// All matches ordered by kickoff_time, with team objects joined.
 final allMatchesProvider = FutureProvider<List<MatchModel>>((ref) async {
+  ref.watch(matchesChangeTickerProvider);
   final data = await supabase
       .from('matches')
       .select('*, team1:teams!team1_id(*), team2:teams!team2_id(*)')
@@ -19,6 +38,7 @@ final allMatchesProvider = FutureProvider<List<MatchModel>>((ref) async {
 
 /// Up to 5 upcoming scheduled matches the current user hasn't predicted yet.
 final upcomingUnpredictedProvider = FutureProvider<List<MatchModel>>((ref) async {
+  ref.watch(matchesChangeTickerProvider);
   final userId = ref.watch(currentUserIdProvider);
   if (userId == null) return [];
 
@@ -55,6 +75,7 @@ final upcomingUnpredictedProvider = FutureProvider<List<MatchModel>>((ref) async
 /// Last 3 finalised matches with the current user's prediction (nullable).
 final recentResultsProvider =
     FutureProvider<List<(MatchModel, PredictionModel?)>>((ref) async {
+  ref.watch(matchesChangeTickerProvider);
   final userId = ref.watch(currentUserIdProvider);
 
   final matches = await supabase
@@ -101,6 +122,7 @@ final recentResultsProvider =
 /// Sorted: live first, then scheduled by kickoff asc, then finals by kickoff desc.
 final liveMatchesProvider = FutureProvider<List<MatchModel>>((ref) async {
 
+  ref.watch(matchesChangeTickerProvider);
   final now = DateTime.now();
   final todayStart =
       DateTime(now.year, now.month, now.day).toUtc().toIso8601String();
