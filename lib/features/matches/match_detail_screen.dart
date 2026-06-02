@@ -711,10 +711,16 @@ class _PredictionSummaryCard extends StatelessWidget {
                   const Icon(Symbols.sports_soccer,
                       size: 13, color: AppColors.onSurfaceVariant),
                   const SizedBox(width: 5),
-                  Text(
-                    'Goalscorer pick submitted',
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: AppColors.onSurfaceVariant),
+                  Expanded(
+                    child: Text(
+                      _resolveScorerName(match, pred.predictedScorerId).isEmpty
+                          ? 'Goalscorer pick submitted'
+                          : 'Goalscorer: ${_resolveScorerName(match, pred.predictedScorerId)}',
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: AppColors.onSurfaceVariant),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                 ],
               ),
@@ -1959,6 +1965,20 @@ String _resolveTeamName(MatchModel match, int teamId) {
   if (match.team1?.id == teamId) return match.team1!.name;
   if (match.team2?.id == teamId) return match.team2!.name;
   return '#$teamId';
+}
+
+/// Resolves a player_id to a display name by walking both teams' rosters.
+/// Falls back to `#<id>` when the player is not on either side (out-of-date
+/// roster cache or stale prediction); empty string when no id provided.
+String _resolveScorerName(MatchModel match, int? playerId) {
+  if (playerId == null) return '';
+  for (final p in [
+    ...?match.team1?.players,
+    ...?match.team2?.players,
+  ]) {
+    if (p.id == playerId) return _decodeHtml(p.name);
+  }
+  return '#$playerId';
 }
 
 /// Minimal HTML entity decoder for player names stored with entities in the DB.

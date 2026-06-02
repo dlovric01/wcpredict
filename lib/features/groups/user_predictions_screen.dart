@@ -3,6 +3,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:go_router/go_router.dart';
 
+import 'package:material_symbols_icons/symbols.dart';
+
+import 'package:wcpredict/core/models/player_model.dart';
+import 'package:wcpredict/core/models/team_model.dart';
 import 'package:wcpredict/core/models/match_model.dart';
 import 'package:wcpredict/core/models/prediction_model.dart';
 import 'package:wcpredict/core/theme/app_colors.dart';
@@ -385,6 +389,12 @@ class _PredictionTile extends StatelessWidget {
                     ],
                   ],
                 ),
+                // ── Bonus picks (first-team & goalscorer) ─────────────────
+                if (prediction.predictedFirstTeamId != null ||
+                    prediction.predictedScorerId != null) ...[
+                  const SizedBox(height: 10),
+                  _BonusPicksRow(prediction: prediction, match: match),
+                ],
                 // ── Points breakdown ──────────────────────────────────────
                 if (isFinal) ...[
                   const SizedBox(height: 10),
@@ -662,6 +672,126 @@ class _StatusBadge extends StatelessWidget {
               color: AppColors.live,
               fontWeight: FontWeight.w700,
             ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Bonus picks row — surfaces the user's first-team-to-score + goalscorer
+// selections with hit/miss styling once the match is final. Pre-final the
+// chips are neutral; post-final they go green for a correct pick.
+// ---------------------------------------------------------------------------
+
+class _BonusPicksRow extends StatelessWidget {
+  const _BonusPicksRow({required this.prediction, required this.match});
+  final PredictionModel prediction;
+  final MatchModel match;
+
+  TeamModel? _teamById(int? id) {
+    if (id == null) return null;
+    if (match.team1?.id == id) return match.team1;
+    if (match.team2?.id == id) return match.team2;
+    return null;
+  }
+
+  PlayerModel? _playerById(int? id) {
+    if (id == null) return null;
+    for (final p in [
+      ...?match.team1?.players,
+      ...?match.team2?.players,
+    ]) {
+      if (p.id == id) return p;
+    }
+    return null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isFinal = match.status == 'final';
+    final firstTeam = _teamById(prediction.predictedFirstTeamId);
+    final scorer = _playerById(prediction.predictedScorerId);
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 6,
+      children: [
+        if (prediction.predictedFirstTeamId != null)
+          _PickChip(
+            icon: Symbols.flag,
+            label: 'First',
+            value: firstTeam?.code ?? firstTeam?.name ?? '#${prediction.predictedFirstTeamId}',
+            hit: isFinal && prediction.firstTeamHit,
+            isFinal: isFinal,
+          ),
+        if (prediction.predictedScorerId != null)
+          _PickChip(
+            icon: Symbols.sports_soccer,
+            label: 'Scorer',
+            value: scorer?.name ?? '#${prediction.predictedScorerId}',
+            hit: isFinal && prediction.goalscorerHit,
+            isFinal: isFinal,
+          ),
+      ],
+    );
+  }
+}
+
+class _PickChip extends StatelessWidget {
+  const _PickChip({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.hit,
+    required this.isFinal,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+  final bool hit;
+  final bool isFinal;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final fg = hit
+        ? AppColors.primary
+        : (isFinal ? AppColors.onSurfaceMuted : AppColors.onSurfaceVariant);
+    final bg = hit
+        ? AppColors.primary.withValues(alpha: 0.14)
+        : AppColors.surfaceHighest.withValues(alpha: 0.6);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: AppRadii.pillRadius,
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 13, color: fg),
+          const SizedBox(width: 5),
+          Text(
+            '$label: ',
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: fg.withValues(alpha: 0.75),
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          Text(
+            value,
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: fg,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          if (hit) ...[
+            const SizedBox(width: 4),
+            Icon(Symbols.check_circle, size: 13, color: fg),
+          ],
+        ],
       ),
     );
   }

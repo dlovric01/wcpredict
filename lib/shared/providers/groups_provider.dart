@@ -80,7 +80,11 @@ final userPredictionsProvider = FutureProvider.family<
     ref.watch(currentUserIdProvider);
     final data = await supabase
         .from('predictions')
-        .select('*, match:matches!match_id(*, team1:teams!team1_id(*), team2:teams!team2_id(*))')
+        .select(
+          '*, match:matches!match_id('
+          '*, team1:teams!team1_id(*, players(*)),'
+          ' team2:teams!team2_id(*, players(*)))',
+        )
         .eq('user_id', userId)
         .not('locked_at', 'is', null);
 
