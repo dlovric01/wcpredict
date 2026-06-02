@@ -16,6 +16,14 @@ class MatchModel {
   final int? scoreEtTeam2;
   final int? scorePenTeam1;
   final int? scorePenTeam2;
+  // Live broadcast state — written by poll_live_matches from
+  // api-sports.io `fixture.status.elapsed / extra / short`. Null when
+  // the match isn't currently live. Lets the client show the exact
+  // broadcast minute + phase ("HT", "ET", "BT", "P") instead of
+  // deriving them from kickoff_time + a half-time-break heuristic.
+  final int? currentMinute;
+  final int? currentMinuteExtra;
+  final String? currentPeriod;
   final DateTime? updatedAt;
 
   /// Populated when the query joins the teams table.
@@ -42,6 +50,9 @@ class MatchModel {
     this.scoreEtTeam2,
     this.scorePenTeam1,
     this.scorePenTeam2,
+    this.currentMinute,
+    this.currentMinuteExtra,
+    this.currentPeriod,
     this.updatedAt,
     this.team1,
     this.team2,
@@ -111,6 +122,9 @@ class MatchModel {
       scoreEtTeam2: (json['score_et_team2'] as num?)?.toInt(),
       scorePenTeam1: (json['score_pen_team1'] as num?)?.toInt(),
       scorePenTeam2: (json['score_pen_team2'] as num?)?.toInt(),
+      currentMinute: (json['current_minute'] as num?)?.toInt(),
+      currentMinuteExtra: (json['current_minute_extra'] as num?)?.toInt(),
+      currentPeriod: json['current_period'] as String?,
       updatedAt: json['updated_at'] != null
           ? DateTime.parse(json['updated_at'] as String)
           : null,
@@ -137,6 +151,9 @@ class MatchModel {
         'score_et_team2': scoreEtTeam2,
         'score_pen_team1': scorePenTeam1,
         'score_pen_team2': scorePenTeam2,
+        'current_minute': currentMinute,
+        'current_minute_extra': currentMinuteExtra,
+        'current_period': currentPeriod,
         'updated_at': updatedAt?.toIso8601String(),
         'formation_team1': formationTeam1,
         'formation_team2': formationTeam2,
@@ -156,6 +173,9 @@ class MatchModel {
     int? scoreEtTeam2,
     int? scorePenTeam1,
     int? scorePenTeam2,
+    int? currentMinute,
+    int? currentMinuteExtra,
+    String? currentPeriod,
     DateTime? updatedAt,
   }) {
     return MatchModel(
@@ -174,6 +194,9 @@ class MatchModel {
       scoreEtTeam2: scoreEtTeam2 ?? this.scoreEtTeam2,
       scorePenTeam1: scorePenTeam1 ?? this.scorePenTeam1,
       scorePenTeam2: scorePenTeam2 ?? this.scorePenTeam2,
+      currentMinute: currentMinute ?? this.currentMinute,
+      currentMinuteExtra: currentMinuteExtra ?? this.currentMinuteExtra,
+      currentPeriod: currentPeriod ?? this.currentPeriod,
       updatedAt: updatedAt ?? this.updatedAt,
       team1: team1,
       team2: team2,
@@ -206,6 +229,9 @@ class MatchModel {
           scoreEtTeam2 == other.scoreEtTeam2 &&
           scorePenTeam1 == other.scorePenTeam1 &&
           scorePenTeam2 == other.scorePenTeam2 &&
+          currentMinute == other.currentMinute &&
+          currentMinuteExtra == other.currentMinuteExtra &&
+          currentPeriod == other.currentPeriod &&
           updatedAt == other.updatedAt &&
           team1 == other.team1 &&
           team2 == other.team2 &&
@@ -229,6 +255,9 @@ class MatchModel {
         scoreEtTeam2,
         scorePenTeam1,
         scorePenTeam2,
+        currentMinute,
+        currentMinuteExtra,
+        currentPeriod,
         updatedAt,
         team1,
         team2,

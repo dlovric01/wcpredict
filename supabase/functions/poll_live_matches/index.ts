@@ -124,6 +124,18 @@ Deno.serve(async (req) => {
             status: 'live',
             score_ft_team1: f.goals.home,
             score_ft_team2: f.goals.away,
+            // Authoritative live broadcast minute + phase from api-sports
+            // (Pro plan provides these on every fixture in the live feed).
+            // Lets the Flutter client display "67'" / "HT" / "ET" / "PEN"
+            // straight from the source instead of deriving them from
+            // kickoff_time + a half-time-break heuristic.
+            //
+            //   status.elapsed → current_minute
+            //   status.extra   → current_minute_extra (stoppage)
+            //   status.short   → current_period (1H / HT / 2H / ET / BT / P)
+            current_minute:       f.fixture.status?.elapsed ?? null,
+            current_minute_extra: f.fixture.status?.extra   ?? null,
+            current_period:       f.fixture.status?.short   ?? null,
             updated_at: now.toISOString(),
           })
           .eq('id', match.id);
@@ -172,6 +184,11 @@ Deno.serve(async (req) => {
               score_et_team2: f.score.extratime?.away ?? null,
               score_pen_team1: f.score.penalty?.home ?? null,
               score_pen_team2: f.score.penalty?.away ?? null,
+              // Match is over — clear the live ticker fields so the
+              // detail screen doesn't keep showing a stale minute.
+              current_minute:       null,
+              current_minute_extra: null,
+              current_period:       null,
               updated_at: now.toISOString(),
             })
             .eq('id', match.id);

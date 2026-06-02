@@ -20,32 +20,58 @@ import 'package:wcpredict/shared/providers/auth_provider.dart';
 // trigger a full list refetch. Pull-to-refresh and explicit invalidation
 // remain the only paths that re-issue the join query.
 
-/// Wall-clock pulse, emits roughly every 10 seconds. Watched by widgets
-/// that render the live minute (e.g. `LiveMinuteText`) so a single timer
-/// drives every minute pill in the tree instead of one per widget.
+/// Wall-clock pulse, emits every 30 seconds. Watched by widgets that
+/// render the live minute (`_LiveMinutePill`, `_CardMinuteLabel`) so
+/// a single timer drives every minute pill in the tree instead of
+/// one per widget. 30 s is fast enough for a minute-granularity
+/// display while halving the rebuild cost vs a 10 s tick.
+///
+/// Acts as a fallback only — when the api-sports broadcast minute
+/// is fresh (`currentPeriod` populated), widgets show that value
+/// directly and the ticker just keeps the wall-clock view current
+/// between poll cycles.
 final clockTickerProvider = StreamProvider<DateTime>((ref) async* {
   yield DateTime.now();
   yield* Stream.periodic(
-    const Duration(seconds: 10),
+    const Duration(seconds: 30),
     (_) => DateTime.now(),
   );
 });
 
-/// Single websocket subscription to the `matches` table. Emits a
-/// `Map<id, MatchModel>` snapshot whenever any row changes. Test
-/// fixtures (`id < 100000`) are filtered out so they never appear in
-/// live overlays.
+/// Single websocket subscription to the `matches` table, scoped via
+/// `.stream()`'s single-filter slot to a rolling 6-hour-past lower
+/// bound on `kickoff_time`. Matches older than that (group-stage
+/// fixtures finished days ago) never push deltas through the
+/// websocket — the baseline `allMatchesProvider` fetch covers their
+/// static state.
 ///
-/// Internal — consumers should use [liveMatchProvider] which fans out
-/// per-id with `.select` to avoid spurious rebuilds.
+/// On the Supabase free plan (2M realtime messages / month, 5GB
+/// egress), this turns a World Cup poll over 64 finalised fixtures
+/// into a poll over the ~5-15 fixtures in the active window —
+/// roughly an order-of-magnitude reduction during tournament weeks.
+///
+/// supabase_flutter's `.stream()` builder accepts only a single
+/// chained filter; the test-fixture exclusion (`id < 100000`) is
+/// applied client-side after the snapshot arrives.
+///
+/// Internal — consumers should use [liveMatchProvider] which fans
+/// out per-id with `.select` to avoid spurious rebuilds.
 final _liveMatchesMapProvider = StreamProvider<Map<int, MatchModel>>((ref) {
+  final windowStart = DateTime.now()
+      .toUtc()
+      .subtract(const Duration(hours: 6))
+      .toIso8601String();
   return supabase
       .from('matches')
       .stream(primaryKey: ['id'])
+      .gte('kickoff_time', windowStart)
       .map((rows) {
     final out = <int, MatchModel>{};
     for (final r in rows) {
       final id = (r['id'] as num).toInt();
+      // Regression-test fixtures (id < 100000) are excluded
+      // client-side — `.stream()` only allows a single filter and
+      // we spend it on the kickoff-time window above.
       if (id < 100000) continue;
       out[id] = MatchModel.fromJson(r);
     }
@@ -68,21 +94,42 @@ final liveMatchProvider = Provider.family<MatchModel?, int>((ref, id) {
 });
 
 /// "Effective" match: the cached baseline (with teams joined) merged
-/// with the live overlay (status + scores). Returns the baseline as-is
-/// when no overlay exists.
+/// with the live overlay (status + scores + broadcast minute). When
+/// `overlay` is null returns the baseline unchanged.
+///
+/// Unlike `MatchModel.copyWith`, this function takes the overlay's
+/// values *directly* for live broadcast fields — including null. That
+/// matters because `current_minute` legitimately transitions back to
+/// null when poll_live_matches finalises a match, where copyWith's
+/// `?? this.field` would keep showing a stale "88'" forever.
 MatchModel _merge(MatchModel base, MatchModel? overlay) {
   if (overlay == null) return base;
-  return base.copyWith(
-    status: overlay.status,
-    scoreFtTeam1: overlay.scoreFtTeam1,
-    scoreFtTeam2: overlay.scoreFtTeam2,
-    scoreHtTeam1: overlay.scoreHtTeam1,
-    scoreHtTeam2: overlay.scoreHtTeam2,
-    scoreEtTeam1: overlay.scoreEtTeam1,
-    scoreEtTeam2: overlay.scoreEtTeam2,
-    scorePenTeam1: overlay.scorePenTeam1,
-    scorePenTeam2: overlay.scorePenTeam2,
-    updatedAt: overlay.updatedAt,
+  return MatchModel(
+    id: base.id,
+    round: base.round,
+    groupLetter: base.groupLetter,
+    team1Id: base.team1Id,
+    team2Id: base.team2Id,
+    kickoffTime: base.kickoffTime,
+    status: overlay.status ?? base.status,
+    scoreFtTeam1: overlay.scoreFtTeam1 ?? base.scoreFtTeam1,
+    scoreFtTeam2: overlay.scoreFtTeam2 ?? base.scoreFtTeam2,
+    scoreHtTeam1: overlay.scoreHtTeam1 ?? base.scoreHtTeam1,
+    scoreHtTeam2: overlay.scoreHtTeam2 ?? base.scoreHtTeam2,
+    scoreEtTeam1: overlay.scoreEtTeam1 ?? base.scoreEtTeam1,
+    scoreEtTeam2: overlay.scoreEtTeam2 ?? base.scoreEtTeam2,
+    scorePenTeam1: overlay.scorePenTeam1 ?? base.scorePenTeam1,
+    scorePenTeam2: overlay.scorePenTeam2 ?? base.scorePenTeam2,
+    // Live broadcast fields — overlay wins absolutely so a null
+    // clears the cached "88'" when the match transitions to final.
+    currentMinute: overlay.currentMinute,
+    currentMinuteExtra: overlay.currentMinuteExtra,
+    currentPeriod: overlay.currentPeriod,
+    updatedAt: overlay.updatedAt ?? base.updatedAt,
+    team1: base.team1,
+    team2: base.team2,
+    formationTeam1: base.formationTeam1,
+    formationTeam2: base.formationTeam2,
   );
 }
 

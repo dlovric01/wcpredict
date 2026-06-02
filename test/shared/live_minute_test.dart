@@ -235,4 +235,108 @@ void main() {
       );
     });
   });
+  // ── api-sports broadcast minute (Pro plan) — wins over wall-clock ──
+  group('api-sports broadcast minute takes priority', () {
+    MatchModel apiLive({
+      required String period,
+      int? minute,
+      int? extra,
+      // Wall-clock kickoff deliberately set to a value that would
+      // produce a *different* label, to prove the api value wins.
+      Duration kickoffOffset = const Duration(minutes: 9),
+    }) =>
+        MatchModel(
+          id: 1,
+          status: 'live',
+          kickoffTime: now.subtract(kickoffOffset),
+          currentPeriod: period,
+          currentMinute: minute,
+          currentMinuteExtra: extra,
+        );
+
+    test('1H minute 23 → "23\'" (wall-clock would say "9\'")', () {
+      expect(
+        formatLiveMinute(apiLive(period: '1H', minute: 23), now),
+        "23'",
+      );
+    });
+
+    test('2H minute 67 → "67\'"', () {
+      expect(
+        formatLiveMinute(apiLive(period: '2H', minute: 67), now),
+        "67'",
+      );
+    });
+
+    test('1H stoppage minute=45 extra=3 → "45+3\'"', () {
+      expect(
+        formatLiveMinute(apiLive(period: '1H', minute: 45, extra: 3), now),
+        "45+3'",
+      );
+    });
+
+    test('2H stoppage minute=90 extra=5 → "90+5\'"', () {
+      expect(
+        formatLiveMinute(apiLive(period: '2H', minute: 90, extra: 5), now),
+        "90+5'",
+      );
+    });
+
+    test('HT period → "HT"', () {
+      expect(formatLiveMinute(apiLive(period: 'HT'), now), 'HT');
+    });
+
+    test('ET period with minute 105 → "105\'"', () {
+      expect(
+        formatLiveMinute(apiLive(period: 'ET', minute: 105), now),
+        "105'",
+      );
+    });
+
+    test('BT period (break before ET) → "BT"', () {
+      expect(formatLiveMinute(apiLive(period: 'BT'), now), 'BT');
+    });
+
+    test('P period (penalty shootout) → "PEN"', () {
+      expect(formatLiveMinute(apiLive(period: 'P'), now), 'PEN');
+    });
+
+    test('PEN period alias → "PEN"', () {
+      expect(formatLiveMinute(apiLive(period: 'PEN'), now), 'PEN');
+    });
+
+    test('INT period (interrupted) → "INT"', () {
+      expect(formatLiveMinute(apiLive(period: 'INT'), now), 'INT');
+    });
+
+    test('unknown period with minute → falls back to minute label', () {
+      expect(
+        formatLiveMinute(apiLive(period: 'XYZ', minute: 42), now),
+        "42'",
+      );
+    });
+
+    test('empty currentPeriod string → falls back to wall-clock', () {
+      // Empty string is treated as absent (defensive: db could write '').
+      final m = MatchModel(
+        id: 1,
+        status: 'live',
+        kickoffTime: now.subtract(const Duration(minutes: 4)),
+        currentPeriod: '',
+      );
+      expect(formatLiveMinute(m, now), "4'");
+    });
+
+    test('null currentPeriod with broadcast minute set → falls back', () {
+      // currentMinute alone (without period) is ambiguous; we keep
+      // wall-clock derivation as the source of truth in that case.
+      final m = MatchModel(
+        id: 1,
+        status: 'live',
+        kickoffTime: now.subtract(const Duration(minutes: 4)),
+        currentMinute: 99,
+      );
+      expect(formatLiveMinute(m, now), "4'");
+    });
+  });
 }

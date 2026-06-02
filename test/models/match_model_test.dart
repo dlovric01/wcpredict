@@ -147,4 +147,61 @@ void main() {
       expect(m.isKnockout, isFalse);
     });
   });
+
+  group('MatchModel live broadcast fields', () {
+    test('fromJson parses current_minute / extra / period', () {
+      final m = MatchModel.fromJson({
+        'id': 999001,
+        'round': 'Matchday 1',
+        'team1_id': 1,
+        'team2_id': 2,
+        'kickoff_time': '2026-06-15T18:00:00.000Z',
+        'status': 'live',
+        'current_minute': 67,
+        'current_minute_extra': 2,
+        'current_period': '2H',
+      });
+      expect(m.currentMinute, 67);
+      expect(m.currentMinuteExtra, 2);
+      expect(m.currentPeriod, '2H');
+    });
+
+    test('fromJson tolerates missing live fields (pre-Live row)', () {
+      final m = MatchModel.fromJson({
+        'id': 100001,
+        'round': 'Matchday 1',
+        'team1_id': 1,
+        'team2_id': 2,
+        'kickoff_time': '2026-06-15T18:00:00.000Z',
+        'status': 'scheduled',
+      });
+      expect(m.currentMinute, isNull);
+      expect(m.currentMinuteExtra, isNull);
+      expect(m.currentPeriod, isNull);
+    });
+
+    test('toJson round-trips live fields', () {
+      const m = MatchModel(
+        id: 1,
+        currentMinute: 45,
+        currentMinuteExtra: 3,
+        currentPeriod: '1H',
+      );
+      final json = m.toJson();
+      expect(json['current_minute'], 45);
+      expect(json['current_minute_extra'], 3);
+      expect(json['current_period'], '1H');
+    });
+
+    test('== treats live fields (so .select dedups on broadcast change)', () {
+      const a = MatchModel(id: 1, currentMinute: 67, currentPeriod: '2H');
+      const b = MatchModel(id: 1, currentMinute: 67, currentPeriod: '2H');
+      const c = MatchModel(id: 1, currentMinute: 68, currentPeriod: '2H');
+      const d = MatchModel(id: 1, currentMinute: 67, currentPeriod: 'HT');
+      expect(a, equals(b));
+      expect(a, isNot(equals(c)), reason: 'minute change must invalidate ==');
+      expect(a, isNot(equals(d)), reason: 'period change must invalidate ==');
+      expect(a.hashCode, b.hashCode);
+    });
+  });
 }
