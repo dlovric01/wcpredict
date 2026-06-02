@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show SignOutScope;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -10,7 +11,6 @@ import 'package:wcpredict/core/theme/app_colors.dart';
 import 'package:wcpredict/core/theme/app_radii.dart';
 import 'package:wcpredict/shared/providers/groups_provider.dart';
 import 'package:wcpredict/shared/providers/auth_provider.dart';
-import 'package:wcpredict/shared/widgets/app_sheet.dart';
 
 // ---------------------------------------------------------------------------
 // Providers
@@ -164,14 +164,6 @@ class ProfileScreen extends ConsumerWidget {
               ),
               child: Column(
                 children: [
-                  profileAsync.maybeWhen(
-                    data: (profile) => ListTile(
-                      leading: const Icon(Icons.edit_outlined),
-                      title: const Text('Edit display name'),
-                      onTap: () => _EditNameDialog.show(context, profile),
-                    ),
-                    orElse: () => const SizedBox.shrink(),
-                  ),
                   ListTile(
                     leading: const Icon(Icons.palette_outlined),
                     title: const Text('Theme'),
@@ -191,33 +183,43 @@ class ProfileScreen extends ConsumerWidget {
                     ),
                   ),
                   ListTile(
-                    leading: const Icon(Icons.terminal_outlined),
-                    title: const Text('View logs'),
-                    subtitle: const Text('Errors & debug info'),
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute<void>(
-                        builder: (_) => TalkerScreen(talker: talker),
+                    leading: const Icon(Icons.menu_book_outlined),
+                    title: const Text('How scoring works'),
+                    subtitle: const Text('Rules, multipliers & tournament picks'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => context.push('/rules'),
+                  ),
+                  if (kDebugMode)
+                    ListTile(
+                      leading: const Icon(Icons.terminal_outlined),
+                      title: const Text('View logs'),
+                      subtitle: const Text('Errors & debug info'),
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute<void>(
+                          builder: (_) => TalkerScreen(talker: talker),
+                        ),
                       ),
                     ),
-                  ),
                 ],
               ),
             ),
             const SizedBox(height: 32),
 
-            // ── Dev tools ─────────────────────────────────────────────────
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const Icon(Icons.science_outlined,
-                  color: AppColors.secondary),
-              title: const Text('Live Simulator'),
-              subtitle: const Text('Test realtime pipeline end-to-end'),
-              trailing: const Icon(Icons.chevron_right,
-                  color: AppColors.onSurfaceMuted),
-              onTap: () => context.push('/dev/simulate'),
-            ),
-            const SizedBox(height: 8),
+            // ── Dev tools — debug builds only ─────────────────────────────
+            if (kDebugMode) ...[
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.science_outlined,
+                    color: AppColors.secondary),
+                title: const Text('Live Simulator'),
+                subtitle: const Text('Test realtime pipeline end-to-end'),
+                trailing: const Icon(Icons.chevron_right,
+                    color: AppColors.onSurfaceMuted),
+                onTap: () => context.push('/dev/simulate'),
+              ),
+              const SizedBox(height: 8),
+            ],
 
             // ── Sign out ──────────────────────────────────────────────────
             OutlinedButton(
@@ -270,16 +272,21 @@ class ProfileScreen extends ConsumerWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Profile header — avatar + display name
+// Profile header — avatar + tap-to-edit display name
 // ---------------------------------------------------------------------------
 
-class _ProfileHeader extends StatelessWidget {
+class _ProfileHeader extends ConsumerStatefulWidget {
   const _ProfileHeader({this.profile});
 
   final Map<String, dynamic>? profile;
 
+  @override
+  ConsumerState<_ProfileHeader> createState() => _ProfileHeaderState();
+}
+
+class _ProfileHeaderState extends ConsumerState<_ProfileHeader> {
   String get _displayName {
-    final explicit = profile?['display_name'] as String?;
+    final explicit = widget.profile?['display_name'] as String?;
     if (explicit != null && explicit.isNotEmpty) return explicit;
     final email = supabase.auth.currentUser?.email ?? '';
     final atIdx = email.indexOf('@');
@@ -291,31 +298,77 @@ class _ProfileHeader extends StatelessWidget {
   String get _initial =>
       _displayName.isNotEmpty ? _displayName.trim()[0].toUpperCase() : '?';
 
+  String? get _avatarUrl {
+    final url = widget.profile?['avatar_url'] as String?;
+    return (url == null || url.isEmpty) ? null : url;
+  }
+
+  Future<void> _editName() {
+    return _EditNameDialog.show(context, widget.profile);
+  }
+
   @override
   Widget build(BuildContext context) {
     final tt = Theme.of(context).textTheme;
+    final avatarUrl = _avatarUrl;
+
     return Column(
       children: [
         Container(
           width: 80,
           height: 80,
-          decoration: const BoxDecoration(
+          decoration: BoxDecoration(
             shape: BoxShape.circle,
-            gradient: LinearGradient(
-              colors: [AppColors.primary, AppColors.tertiary],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
+            gradient: avatarUrl == null
+                ? const LinearGradient(
+                    colors: [AppColors.primary, AppColors.tertiary],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  )
+                : null,
+            image: avatarUrl != null
+                ? DecorationImage(
+                    image: NetworkImage(avatarUrl),
+                    fit: BoxFit.cover,
+                  )
+                : null,
           ),
-          child: Center(
-            child: Text(
-              _initial,
-              style: tt.displaySmall?.copyWith(color: AppColors.onPrimary),
+          child: avatarUrl == null
+              ? Center(
+                  child: Text(
+                    _initial,
+                    style: tt.displaySmall?.copyWith(color: AppColors.onPrimary),
+                  ),
+                )
+              : null,
+        ),
+        const SizedBox(height: 12),
+        // Name — tap to edit. Padding gives a comfortable hit target.
+        InkWell(
+          onTap: _editName,
+          borderRadius: BorderRadius.circular(8),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Flexible(
+                  child: Text(
+                    _displayName,
+                    style: tt.headlineSmall,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Icon(
+                  Icons.edit_outlined,
+                  size: 16,
+                  color: AppColors.onSurfaceVariant,
+                ),
+              ],
             ),
           ),
         ),
-        const SizedBox(height: 12),
-        Text(_displayName, style: tt.headlineSmall),
         const SizedBox(height: 4),
         Text(
           supabase.auth.currentUser?.email ?? '',
@@ -473,31 +526,6 @@ class _StatsSection extends StatelessWidget {
               label: 'Goalscorer hits',
               value: '${stats.goalscorerHits}',
             ),
-            const SizedBox(height: 8),
-            TextButton(
-              onPressed: () => _showScoringExplainer(context),
-              child: const Text('How scoring works →'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showScoringExplainer(BuildContext context) {
-    showAppSheet<void>(
-      context: context,
-      builder: (_) => AppSheetBody(
-        title: 'How Scoring Works',
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: const [
-            _ScoreRow(pts: '2 pts', desc: 'Correct outcome (W/D/L)'),
-            _ScoreRow(pts: '3 pts', desc: 'Correct goal difference'),
-            _ScoreRow(pts: '3 pts', desc: 'Exact score (e.g. 2-1 → 2-1)'),
-            _ScoreRow(pts: '5 pts', desc: 'Goalscorer picked correctly'),
-            _ScoreRow(pts: '×2–6×', desc: 'Knockout round booster applied'),
           ],
         ),
       ),
@@ -534,34 +562,6 @@ class _StatRow extends StatelessWidget {
               fontFeatures: const [FontFeature.tabularFigures()],
             ),
           ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ScoreRow extends StatelessWidget {
-  const _ScoreRow({required this.pts, required this.desc});
-
-  final String pts;
-  final String desc;
-
-  @override
-  Widget build(BuildContext context) {
-    final tt = Theme.of(context).textTheme;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        children: [
-          SizedBox(
-            width: 48,
-            child: Text(
-              pts,
-              style: tt.labelLarge?.copyWith(color: AppColors.primary),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(child: Text(desc, style: tt.bodyMedium)),
         ],
       ),
     );

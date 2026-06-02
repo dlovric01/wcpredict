@@ -81,8 +81,8 @@ void main() {
       );
       await t.pumpWidget(_wrap(m));
       expect(find.text('LIVE'), findsOneWidget);
-      // Score uses U+2013 (en-dash) between numbers
-      expect(find.text('1\u20130'), findsOneWidget);
+      // Score uses the canonical separator (NBSP–NBSP) from score_format.dart.
+      expect(find.text('1\u00A0\u2013\u00A00'), findsOneWidget);
       expect(find.text('vs'), findsNothing);
       expect(find.text('FT'), findsNothing);
     });
@@ -99,7 +99,7 @@ void main() {
         scoreFtTeam2: 1,
       );
       await t.pumpWidget(_wrap(m));
-      expect(find.text('2\u20131'), findsOneWidget);
+      expect(find.text('2\u00A0\u2013\u00A01'), findsOneWidget);
       expect(find.text('FT'), findsOneWidget);
       expect(find.text('LIVE'), findsNothing);
       expect(find.text('vs'), findsNothing);

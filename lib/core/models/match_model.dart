@@ -1,3 +1,4 @@
+import '../scoring_rules.dart';
 import 'team_model.dart';
 
 class MatchModel {
@@ -68,35 +69,18 @@ class MatchModel {
   }
 
   /// True for knockout rounds including 3rd place and Final.
-  bool get isKnockout {
-    final r = round;
-    return r == 'R32' || r == 'R16' || r == 'QF' || r == 'SF' ||
-        r == '3rd' || r == 'Final';
-  }
+  bool get isKnockout =>
+      kBoosterMultipliers.containsKey(round) ||
+      kAutoMultipliers.containsKey(round);
 
   /// True for rounds where users can apply a manual booster (R32/R16/QF/SF).
-  bool get isBoosterRound {
-    final r = round;
-    return r == 'R32' || r == 'R16' || r == 'QF' || r == 'SF';
-  }
+  bool get isBoosterRound => kBoosterMultipliers.containsKey(round);
 
   /// Auto-multiplier applied regardless of user action: 5 for 3rd, 6 for Final.
-  int get autoMultiplier {
-    if (round == '3rd')   return 5;
-    if (round == 'Final') return 6;
-    return 1;
-  }
+  int get autoMultiplier => kAutoMultipliers[round] ?? 1;
 
   /// Maximum booster multiplier for this round (R32=2, R16=3, QF=4, SF=5, else 1).
-  int get boosterMultiplier {
-    switch (round) {
-      case 'R32':   return 2;
-      case 'R16':   return 3;
-      case 'QF':    return 4;
-      case 'SF':    return 5;
-      default:      return 1;
-    }
-  }
+  int get boosterMultiplier => kBoosterMultipliers[round] ?? 1;
 
   factory MatchModel.fromJson(Map<String, dynamic> json) {
     TeamModel? parseTeam(dynamic raw) {

@@ -11,6 +11,7 @@ import 'package:wcpredict/core/theme/app_colors.dart';
 import 'package:wcpredict/core/theme/app_radii.dart';
 import 'package:wcpredict/core/theme/app_spacing.dart';
 import 'package:wcpredict/shared/providers/tournament_provider.dart';
+import 'package:wcpredict/features/rules/rules_screen.dart';
 import 'package:wcpredict/shared/widgets/app_sheet.dart';
 
 /// World Cup winner (+75) and Golden Boot (+50) bonus picks. Submitted any
@@ -93,7 +94,20 @@ class _TournamentPredictionsScreenState
     final openingAsync = ref.watch(tournamentOpeningKickoffProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Tournament Picks')),
+      appBar: AppBar(
+        title: const Text('Tournament Picks'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.help_outline),
+            tooltip: 'How scoring works',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => const RulesScreen(anchor: RuleSection.tournament),
+              ),
+            ),
+          ),
+        ],
+      ),
       body: predAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(child: Text('Failed to load: $e')),

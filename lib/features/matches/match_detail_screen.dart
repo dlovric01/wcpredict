@@ -13,11 +13,13 @@ import 'package:wcpredict/core/supabase_client.dart';
 import 'package:wcpredict/core/theme/app_colors.dart';
 import 'package:wcpredict/core/theme/app_radii.dart';
 import 'package:wcpredict/features/matches/predict_logic.dart';
+import 'package:wcpredict/features/rules/rules_screen.dart';
 import 'package:wcpredict/features/matches/first_team_picker.dart';
 import 'package:wcpredict/features/matches/live_events_widget.dart';
 import 'package:wcpredict/shared/providers/match_detail_provider.dart';
 import 'package:wcpredict/shared/providers/matches_provider.dart';
 import 'package:wcpredict/shared/utils/live_minute.dart';
+import 'package:wcpredict/shared/utils/score_format.dart';
 import 'package:wcpredict/shared/providers/predictions_provider.dart';
 import 'package:wcpredict/shared/widgets/team_flag.dart';
 import 'package:wcpredict/shared/widgets/verdict_pill.dart';
@@ -83,6 +85,23 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen>
         foregroundColor: AppColors.onSurface,
         surfaceTintColor: AppColors.surfaceBase,
         elevation: 0,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.help_outline),
+            tooltip: 'How scoring works',
+            onPressed: () {
+              final m = matchAsync.valueOrNull;
+              final anchor = (m != null && (m.isBoosterRound || m.autoMultiplier > 1))
+                  ? RuleSection.multipliers
+                  : RuleSection.matchScoring;
+              Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => RulesScreen(anchor: anchor),
+                ),
+              );
+            },
+          ),
+        ],
       ),
       body: matchAsync.when(
         // matchByIdProvider re-fetches whenever the matches table changes
@@ -232,7 +251,7 @@ class _LiveCenterColumn extends ConsumerWidget {
         ],
         if (isFinal)
           Text(
-            '${m.scoreFtTeam1 ?? 0}–${m.scoreFtTeam2 ?? 0}',
+            formatScore(m.scoreFtTeam1, m.scoreFtTeam2),
             style: theme.textTheme.displayMedium?.copyWith(
               color: AppColors.onSurface,
               fontFeatures: const [FontFeature.tabularFigures()],
@@ -244,7 +263,7 @@ class _LiveCenterColumn extends ConsumerWidget {
           // rendered inside the LIVE chip above; the HT score is folded
           // into a sub-row once both halves are populated.
           Text(
-            '${m.scoreFtTeam1 ?? 0}–${m.scoreFtTeam2 ?? 0}',
+            formatScore(m.scoreFtTeam1, m.scoreFtTeam2),
             style: theme.textTheme.displayMedium?.copyWith(
               color: AppColors.onSurface,
               fontFeatures: const [FontFeature.tabularFigures()],
@@ -265,7 +284,7 @@ class _LiveCenterColumn extends ConsumerWidget {
         if (isLive && hasHt) ...[
           const SizedBox(height: 2),
           Text(
-            'HT ${m.scoreHtTeam1}–${m.scoreHtTeam2}',
+            formatLabeledScore('HT', m.scoreHtTeam1, m.scoreHtTeam2),
             style: theme.textTheme.labelSmall?.copyWith(
               color: AppColors.onSurfaceMuted,
             ),
@@ -274,7 +293,7 @@ class _LiveCenterColumn extends ConsumerWidget {
         if (isFinal && hasHt) ...[
           const SizedBox(height: 2),
           Text(
-            'HT ${m.scoreHtTeam1}–${m.scoreHtTeam2}',
+            formatLabeledScore('HT', m.scoreHtTeam1, m.scoreHtTeam2),
             style: theme.textTheme.labelSmall?.copyWith(
               color: AppColors.onSurfaceMuted,
             ),
@@ -283,7 +302,7 @@ class _LiveCenterColumn extends ConsumerWidget {
         if (isFinal && hasEt) ...[
           const SizedBox(height: 2),
           Text(
-            'ET ${m.scoreEtTeam1}–${m.scoreEtTeam2}',
+            formatLabeledScore('ET', m.scoreEtTeam1, m.scoreEtTeam2),
             style: theme.textTheme.labelSmall?.copyWith(
               color: AppColors.secondary,
               fontWeight: FontWeight.w700,
@@ -293,7 +312,7 @@ class _LiveCenterColumn extends ConsumerWidget {
         if (isFinal && hasPen) ...[
           const SizedBox(height: 2),
           Text(
-            'PEN ${m.scorePenTeam1}–${m.scorePenTeam2}',
+            formatLabeledScore('PEN', m.scorePenTeam1, m.scorePenTeam2),
             style: theme.textTheme.labelSmall?.copyWith(
               color: AppColors.secondary,
               fontWeight: FontWeight.w700,
@@ -988,9 +1007,10 @@ class _PredictTabState extends ConsumerState<_PredictTab> {
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                '${widget.match.scoreFtTeam1 ?? 0}'
-                                ' – '
-                                '${widget.match.scoreFtTeam2 ?? 0}',
+                                formatScore(
+                                  widget.match.scoreFtTeam1,
+                                  widget.match.scoreFtTeam2,
+                                ),
                                 style: theme.textTheme.titleLarge?.copyWith(
                                   color: AppColors.onSurface,
                                   fontWeight: FontWeight.w800,

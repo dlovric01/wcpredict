@@ -9,6 +9,7 @@ import 'package:wcpredict/core/theme/app_colors.dart';
 import 'package:wcpredict/core/theme/app_radii.dart';
 import 'package:wcpredict/shared/providers/groups_provider.dart';
 import 'package:wcpredict/shared/widgets/team_flag.dart';
+import 'package:wcpredict/shared/utils/score_format.dart';
 
 // ---------------------------------------------------------------------------
 
@@ -472,8 +473,9 @@ class _ScoreBlock extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
-    final scoreText =
-        (score1 != null && score2 != null) ? '$score1 – $score2' : '—';
+    final scoreText = (score1 != null && score2 != null)
+        ? formatScore(score1, score2)
+        : '—';
     final scoreColor =
         highlight ? AppColors.onSurface : AppColors.onSurfaceVariant;
 

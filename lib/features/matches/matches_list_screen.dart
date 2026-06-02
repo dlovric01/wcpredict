@@ -10,6 +10,7 @@ import 'package:wcpredict/core/theme/app_radii.dart';
 import 'package:wcpredict/shared/providers/matches_provider.dart';
 import 'package:wcpredict/shared/providers/predictions_provider.dart';
 import 'package:wcpredict/shared/utils/live_minute.dart';
+import 'package:wcpredict/shared/utils/score_format.dart';
 import 'package:wcpredict/shared/widgets/team_flag.dart';
 import 'package:wcpredict/features/matches/tournament_achievement_banner.dart';
 
@@ -26,6 +27,13 @@ class MatchesListScreen extends ConsumerWidget {
       appBar: AppBar(
         backgroundColor: AppColors.surfaceBase,
         title: const Text('Matches'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.help_outline),
+            tooltip: 'How scoring works',
+            onPressed: () => context.push('/rules'),
+          ),
+        ],
       ),
       body: RefreshIndicator(
         color: AppColors.primary,
@@ -474,7 +482,7 @@ class _LiveTeamsBlock extends ConsumerWidget {
       scoreText = _finalScoreLabel(m);
       showScore = true;
     } else if (isLive) {
-      scoreText = '${m.scoreFtTeam1 ?? 0}–${m.scoreFtTeam2 ?? 0}';
+      scoreText = formatScore(m.scoreFtTeam1, m.scoreFtTeam2);
       showScore = true;
     } else {
       scoreText = 'vs';
@@ -529,7 +537,7 @@ class _LiveTeamsBlock extends ConsumerWidget {
                 Padding(
                   padding: const EdgeInsets.only(top: 1),
                   child: Text(
-                    'HT ${m.scoreHtTeam1}–${m.scoreHtTeam2}',
+                    formatLabeledScore('HT', m.scoreHtTeam1, m.scoreHtTeam2),
                     style: theme.textTheme.labelSmall?.copyWith(
                       color: AppColors.onSurfaceMuted,
                       fontFeatures: const [FontFeature.tabularFigures()],
@@ -723,10 +731,10 @@ class _CardMinuteLabel extends ConsumerWidget {
 /// hero gets a richer multi-line presentation in match_detail_screen.
 String _finalScoreLabel(MatchModel m) {
   if (m.scorePenTeam1 != null && m.scorePenTeam2 != null) {
-    return '(p) ${m.scorePenTeam1}–${m.scorePenTeam2}';
+    return '(p) ${formatScore(m.scorePenTeam1, m.scorePenTeam2)}';
   }
   if (m.scoreEtTeam1 != null && m.scoreEtTeam2 != null) {
-    return '(et) ${m.scoreEtTeam1}–${m.scoreEtTeam2}';
+    return '(et) ${formatScore(m.scoreEtTeam1, m.scoreEtTeam2)}';
   }
-  return '${m.scoreFtTeam1 ?? 0}–${m.scoreFtTeam2 ?? 0}';
+  return formatScore(m.scoreFtTeam1, m.scoreFtTeam2);
 }

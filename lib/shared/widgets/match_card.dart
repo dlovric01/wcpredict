@@ -5,6 +5,7 @@ import 'package:wcpredict/core/models/team_model.dart';
 import 'package:wcpredict/core/theme/app_colors.dart';
 import 'package:wcpredict/core/theme/app_radii.dart';
 import 'package:wcpredict/shared/widgets/team_flag.dart';
+import 'package:wcpredict/shared/utils/score_format.dart';
 
 class MatchCard extends StatelessWidget {
   const MatchCard({
@@ -119,12 +120,12 @@ class _CentreScore extends StatelessWidget {
             ),
             const SizedBox(height: 2),
             Text(
-              '${match.scoreFtTeam1 ?? 0}\u2013${match.scoreFtTeam2 ?? 0}',
+              formatScore(match.scoreFtTeam1, match.scoreFtTeam2),
               style: tt.displaySmall?.copyWith(fontFeatures: _tabular),
             ),
           ] else if (isFinal) ...[
             Text(
-              '${match.scoreFtTeam1 ?? 0}\u2013${match.scoreFtTeam2 ?? 0}',
+              formatScore(match.scoreFtTeam1, match.scoreFtTeam2),
               style: tt.displaySmall?.copyWith(fontFeatures: _tabular),
             ),
             const SizedBox(height: 2),

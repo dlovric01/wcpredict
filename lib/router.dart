@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
@@ -15,6 +16,7 @@ import 'features/groups/user_predictions_screen.dart';
 import 'features/matches/match_detail_screen.dart';
 import 'features/matches/matches_list_screen.dart';
 import 'features/profile/profile_screen.dart';
+import 'features/rules/rules_screen.dart';
 import 'features/tournament/tournament_predictions_screen.dart';
 import 'shared/widgets/app_shell.dart';
 
@@ -74,9 +76,14 @@ final appRouter = GoRouter(
       builder: (_, state) =>
           MatchDetailScreen(matchId: int.parse(state.pathParameters['matchId']!)),
     ),
+    if (kDebugMode)
+      GoRoute(
+        path: '/dev/simulate',
+        builder: (_, __) => const SimulationScreen(),
+      ),
     GoRoute(
-      path: '/dev/simulate',
-      builder: (_, __) => const SimulationScreen(),
+      path: '/rules',
+      builder: (_, __) => const RulesScreen(),
     ),
     GoRoute(
       path: '/tournament',

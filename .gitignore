@@ -59,3 +59,4 @@ supabase/.branches/
 
 # Stale debug screenshot
 flutter_01.png
+.worktrees/
