@@ -4,7 +4,9 @@ import 'package:supabase_flutter/supabase_flutter.dart' show SignOutScope;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:talker_flutter/talker_flutter.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:wcpredict/core/logger.dart';
+import 'package:wcpredict/core/legal_urls.dart';
 import 'package:wcpredict/core/models/prediction_model.dart';
 import 'package:wcpredict/core/supabase_client.dart';
 import 'package:wcpredict/core/theme/app_colors.dart';
@@ -201,6 +203,34 @@ class ProfileScreen extends ConsumerWidget {
                         ),
                       ),
                     ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // ── Legal & support ───────────────────────────────────────────
+            Card(
+              shape: RoundedRectangleBorder(
+                borderRadius: AppRadii.cardRadius,
+              ),
+              child: Column(
+                children: [
+                  _LegalTile(
+                    icon: Icons.privacy_tip_outlined,
+                    title: 'Privacy policy',
+                    url: kPrivacyPolicyUrl,
+                  ),
+                  _LegalTile(
+                    icon: Icons.description_outlined,
+                    title: 'Terms of use',
+                    url: kTermsOfUseUrl,
+                  ),
+                  _LegalTile(
+                    icon: Icons.help_outline,
+                    title: 'Support',
+                    subtitle: 'Get help or contact us',
+                    url: kSupportUrl,
+                  ),
                 ],
               ),
             ),
@@ -590,4 +620,50 @@ class _PredictionStats {
   final int firstTeamHits;
   final int goalscorerHits;
   final int predictionCount;
+}
+
+// ---------------------------------------------------------------------------
+// Legal tile — opens a public URL in the system browser via url_launcher.
+//
+// Surfacing the same URLs that App Store Connect points at gives reviewers
+// (and users) an in-app path to the same policy text. The URLs themselves
+// live in `lib/core/legal_urls.dart` so ASC and the app cannot drift.
+// ---------------------------------------------------------------------------
+
+class _LegalTile extends StatelessWidget {
+  const _LegalTile({
+    required this.icon,
+    required this.title,
+    required this.url,
+    this.subtitle,
+  });
+
+  final IconData icon;
+  final String title;
+  final String url;
+  final String? subtitle;
+
+  Future<void> _open(BuildContext context) async {
+    final uri = Uri.parse(url);
+    // `externalApplication` opens Safari/Chrome rather than an embedded
+    // webview — Apple specifically prefers this for legal pages so the
+    // user can verify the domain in the address bar.
+    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!ok && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not open $url')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: Icon(icon),
+      title: Text(title),
+      subtitle: subtitle == null ? null : Text(subtitle!),
+      trailing: const Icon(Icons.open_in_new, size: 18),
+      onTap: () => _open(context),
+    );
+  }
 }

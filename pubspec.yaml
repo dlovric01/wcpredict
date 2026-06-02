@@ -36,6 +36,7 @@ dependencies:
   material_symbols_icons: ^4.2784.0
   cupertino_icons: ^1.0.8
   talker_flutter: ^5.1.16
+  url_launcher: ^6.3.2
 
 dev_dependencies:
   flutter_test:
