@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
-import 'package:go_router/go_router.dart';
 
 import 'package:material_symbols_icons/symbols.dart';
 
@@ -64,8 +63,8 @@ class UserPredictionsScreen extends ConsumerWidget {
       body: predsAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(
-          child: Text('Error: $e',
-              style: const TextStyle(color: AppColors.error)),
+          child:
+              Text('Error: $e', style: const TextStyle(color: AppColors.error)),
         ),
         data: (rows) {
           final completed =
@@ -119,8 +118,7 @@ class UserPredictionsScreen extends ConsumerWidget {
                 ),
               ),
               if (completed.isNotEmpty) ...[
-                _SectionHeader(
-                    label: 'Completed', count: completed.length),
+                _SectionHeader(label: 'Completed', count: completed.length),
                 SliverList(
                   delegate: SliverChildBuilderDelegate(
                     (ctx, i) => _PredictionTile(
@@ -132,8 +130,7 @@ class UserPredictionsScreen extends ConsumerWidget {
                 ),
               ],
               if (upcoming.isNotEmpty) ...[
-                _SectionHeader(
-                    label: 'Upcoming', count: upcoming.length),
+                _SectionHeader(label: 'Upcoming', count: upcoming.length),
                 SliverList(
                   delegate: SliverChildBuilderDelegate(
                     (ctx, i) => _PredictionTile(
@@ -291,8 +288,7 @@ class _SectionHeader extends StatelessWidget {
                     ?.copyWith(fontWeight: FontWeight.w700)),
             const SizedBox(width: 8),
             Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
               decoration: BoxDecoration(
                 color: AppColors.surfaceHighest,
                 borderRadius: AppRadii.pillRadius,
@@ -317,8 +313,7 @@ class _SectionHeader extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _PredictionTile extends StatelessWidget {
-  const _PredictionTile(
-      {required this.prediction, required this.match});
+  const _PredictionTile({required this.prediction, required this.match});
   final PredictionModel prediction;
   final MatchModel match;
 
@@ -345,63 +340,59 @@ class _PredictionTile extends StatelessWidget {
       child: Material(
         color: AppColors.surfaceHigh,
         borderRadius: AppRadii.cardRadius,
-        child: InkWell(
-          borderRadius: AppRadii.cardRadius,
-          onTap: () => context.push('/matches/${match.id}'),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // ── Match header row ──────────────────────────────────────
-                Row(
-                  children: [
-                    Expanded(
-                      child: _MatchHeader(match: match, isLive: isLive),
-                    ),
-                    if (isFinal && earned != null) ...[
-                      const SizedBox(width: 8),
-                      _PointsBadge(points: earned, color: pointColor),
-                    ] else if (!isFinal) ...[
-                      const SizedBox(width: 8),
-                      _StatusBadge(status: match.status),
-                    ],
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // ── Match header row ──────────────────────────────────────
+              Row(
+                children: [
+                  Expanded(
+                    child: _MatchHeader(match: match, isLive: isLive),
+                  ),
+                  if (isFinal && earned != null) ...[
+                    const SizedBox(width: 8),
+                    _PointsBadge(points: earned, color: pointColor),
+                  ] else if (!isFinal) ...[
+                    const SizedBox(width: 8),
+                    _StatusBadge(status: match.status),
                   ],
-                ),
-                const SizedBox(height: 10),
-                // ── Scores row ────────────────────────────────────────────
-                Row(
-                  children: [
+                ],
+              ),
+              const SizedBox(height: 10),
+              // ── Scores row ────────────────────────────────────────────
+              Row(
+                children: [
+                  _ScoreBlock(
+                    label: 'Predicted',
+                    score1: prediction.predictedTeam1,
+                    score2: prediction.predictedTeam2,
+                    highlight: false,
+                  ),
+                  if (isFinal) ...[
+                    const SizedBox(width: 20),
                     _ScoreBlock(
-                      label: 'Predicted',
-                      score1: prediction.predictedTeam1,
-                      score2: prediction.predictedTeam2,
-                      highlight: false,
+                      label: 'Actual',
+                      score1: match.scoreFtTeam1,
+                      score2: match.scoreFtTeam2,
+                      highlight: true,
                     ),
-                    if (isFinal) ...[
-                      const SizedBox(width: 20),
-                      _ScoreBlock(
-                        label: 'Actual',
-                        score1: match.scoreFtTeam1,
-                        score2: match.scoreFtTeam2,
-                        highlight: true,
-                      ),
-                    ],
                   ],
-                ),
-                // ── Bonus picks (first-team & goalscorer) ─────────────────
-                if (prediction.predictedFirstTeamId != null ||
-                    prediction.predictedScorerId != null) ...[
-                  const SizedBox(height: 10),
-                  _BonusPicksRow(prediction: prediction, match: match),
                 ],
-                // ── Points breakdown ──────────────────────────────────────
-                if (isFinal) ...[
-                  const SizedBox(height: 10),
-                  _PointsBreakdown(prediction: prediction),
-                ],
+              ),
+              // ── Bonus picks (first-team & goalscorer) ─────────────────
+              if (prediction.predictedFirstTeamId != null ||
+                  prediction.predictedScorerId != null) ...[
+                const SizedBox(height: 10),
+                _BonusPicksRow(prediction: prediction, match: match),
               ],
-            ),
+              // ── Points breakdown ──────────────────────────────────────
+              if (isFinal) ...[
+                const SizedBox(height: 10),
+                _PointsBreakdown(prediction: prediction),
+              ],
+            ],
           ),
         ),
       ),
@@ -483,9 +474,8 @@ class _ScoreBlock extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
-    final scoreText = (score1 != null && score2 != null)
-        ? formatScore(score1, score2)
-        : '—';
+    final scoreText =
+        (score1 != null && score2 != null) ? formatScore(score1, score2) : '—';
     final scoreColor =
         highlight ? AppColors.onSurface : AppColors.onSurfaceVariant;
 
@@ -570,8 +560,10 @@ class _PointsBreakdown extends StatelessWidget {
 
 class _BreakdownChip extends StatelessWidget {
   const _BreakdownChip(
-      {required this.label, required this.points, required this.max,
-       this.isMultiplier = false});
+      {required this.label,
+      required this.points,
+      required this.max,
+      this.isMultiplier = false});
   final String label;
   final int points;
   final int max;
@@ -591,7 +583,9 @@ class _BreakdownChip extends StatelessWidget {
         color: bgColor,
         borderRadius: AppRadii.pillRadius,
         border: Border.all(
-          color: hit ? AppColors.primary.withValues(alpha: 0.4) : AppColors.outline,
+          color: hit
+              ? AppColors.primary.withValues(alpha: 0.4)
+              : AppColors.outline,
           width: 1,
         ),
       ),
@@ -605,11 +599,12 @@ class _BreakdownChip extends StatelessWidget {
           ),
           const SizedBox(width: 4),
           Text(
-            isMultiplier ? label : '$label · ${points}pt${points != 1 ? 's' : ''}',
+            isMultiplier
+                ? label
+                : '$label · ${points}pt${points != 1 ? 's' : ''}',
             style: Theme.of(context).textTheme.labelSmall?.copyWith(
                   color: color,
-                  fontWeight:
-                      hit ? FontWeight.w600 : FontWeight.normal,
+                  fontWeight: hit ? FontWeight.w600 : FontWeight.normal,
                 ),
           ),
         ],
@@ -633,10 +628,10 @@ class _PointsBadge extends StatelessWidget {
         Text(
           '$points',
           style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                color: color,
-                fontWeight: FontWeight.bold,
-                fontFeatures: const [FontFeature.tabularFigures()],
-              ),
+            color: color,
+            fontWeight: FontWeight.bold,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
         ),
         Text(
           'pts',
@@ -720,7 +715,9 @@ class _BonusPicksRow extends StatelessWidget {
           _PickChip(
             icon: Symbols.flag,
             label: 'First',
-            value: firstTeam?.code ?? firstTeam?.name ?? '#${prediction.predictedFirstTeamId}',
+            value: firstTeam?.code ??
+                firstTeam?.name ??
+                '#${prediction.predictedFirstTeamId}',
             hit: isFinal && prediction.firstTeamHit,
             isFinal: isFinal,
           ),
