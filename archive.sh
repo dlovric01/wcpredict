@@ -25,7 +25,7 @@ flutter build ipa --release \
   --dart-define=SUPABASE_ANON_KEY="$SUPABASE_ANON_KEY" \
   --dart-define=GOOGLE_SERVER_CLIENT_ID="${GOOGLE_SERVER_CLIENT_ID:-}" \
   --dart-define=IOS_REVERSED_CLIENT_ID="${IOS_REVERSED_CLIENT_ID:-}" \
-  "${EXTRA[@]}"
+  ${EXTRA[@]+"${EXTRA[@]}"}
 
 echo ""
 echo "Archive: build/ios/archive/Runner.xcarchive"
