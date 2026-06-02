@@ -7,6 +7,7 @@ import 'package:wcpredict/features/groups/group_name.dart';
 import 'package:wcpredict/features/groups/invite_code.dart';
 import 'package:wcpredict/shared/providers/groups_provider.dart';
 import 'package:wcpredict/shared/widgets/app_sheet.dart';
+import 'package:wcpredict/shared/widgets/app_feedback.dart';
 
 Future<void> showCreateGroupSheet(BuildContext context, WidgetRef ref) {
   return showAppSheet<void>(
@@ -62,7 +63,9 @@ class _CreateGroupSheetState extends ConsumerState<_CreateGroupSheet> {
         'user_id': user.id,
       });
       widget.ref.invalidate(myGroupsProvider);
-      if (mounted) Navigator.pop(context);
+      if (!mounted) return;
+      Navigator.pop(context);
+      AppFeedback.success('Group "$name" created');
     } catch (e) {
       setState(() {
         _submitting = false;

@@ -25,6 +25,7 @@ import 'package:wcpredict/shared/widgets/team_flag.dart';
 import 'package:wcpredict/shared/widgets/verdict_pill.dart';
 import 'package:wcpredict/shared/providers/boosters_provider.dart';
 import 'package:wcpredict/shared/widgets/app_sheet.dart';
+import 'package:wcpredict/shared/widgets/app_feedback.dart';
 
 // ---------------------------------------------------------------------------
 // Screen
@@ -893,15 +894,9 @@ class _PredictTabState extends ConsumerState<_PredictTab> {
         HapticFeedback.mediumImpact();
         widget.onSaved();
       }
+      AppFeedback.success('Prediction saved');
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error: $e'),
-            backgroundColor: AppColors.error,
-          ),
-        );
-      }
+      AppFeedback.error('Could not save prediction: $e');
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -2129,15 +2124,11 @@ class _BoosterToggleState extends ConsumerState<_BoosterToggle> {
       }
       ref.invalidate(boosterForMatchProvider(widget.matchId));
       ref.invalidate(myBoostersProvider);
+      AppFeedback.success(active
+          ? 'Booster applied to this match'
+          : 'Booster removed');
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error: $e'),
-            backgroundColor: AppColors.error,
-          ),
-        );
-      }
+      AppFeedback.error('Booster update failed: $e');
     } finally {
       if (mounted) setState(() => _saving = false);
     }

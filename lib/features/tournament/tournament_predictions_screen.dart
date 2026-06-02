@@ -13,6 +13,7 @@ import 'package:wcpredict/core/theme/app_spacing.dart';
 import 'package:wcpredict/shared/providers/tournament_provider.dart';
 import 'package:wcpredict/features/rules/rules_screen.dart';
 import 'package:wcpredict/shared/widgets/app_sheet.dart';
+import 'package:wcpredict/shared/widgets/app_feedback.dart';
 
 /// World Cup winner (+75) and Golden Boot (+50) bonus picks. Submitted any
 /// time before the opening match; locked thereafter by the DB trigger.
@@ -50,21 +51,10 @@ class _TournamentPredictionsScreenState
         'golden_boot_player_id': _goldenBootPlayerId,
       });
       ref.invalidate(myTournamentPredictionProvider);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Tournament picks saved.')),
-        );
-      }
+      AppFeedback.success('Tournament picks saved');
     } catch (e, st) {
       talker.handle(e, st, 'Tournament prediction save failed');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Save failed: $e'),
-            backgroundColor: Theme.of(context).colorScheme.error,
-          ),
-        );
-      }
+      AppFeedback.error('Save failed: $e');
     } finally {
       if (mounted) setState(() => _saving = false);
     }

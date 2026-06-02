@@ -14,6 +14,7 @@ import 'package:wcpredict/core/theme/app_colors.dart';
 import 'package:wcpredict/core/theme/app_radii.dart';
 import 'package:wcpredict/shared/providers/groups_provider.dart';
 import 'package:wcpredict/shared/providers/auth_provider.dart';
+import 'package:wcpredict/shared/widgets/app_feedback.dart';
 
 // ---------------------------------------------------------------------------
 // Providers
@@ -485,13 +486,11 @@ class _EditNameDialogState extends ConsumerState<_EditNameDialog> {
         onConflict: 'user_id',
       );
       ref.invalidate(_myProfileProvider);
-      if (mounted) Navigator.of(context).pop();
+      if (!mounted) return;
+      Navigator.of(context).pop();
+      AppFeedback.success('Display name updated');
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
-      }
+      AppFeedback.error('Could not update name: $e');
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -678,11 +677,7 @@ class _LegalTile extends StatelessWidget {
     // webview — Apple specifically prefers this for legal pages so the
     // user can verify the domain in the address bar.
     final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    if (!ok && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not open $url')),
-      );
-    }
+    if (!ok) AppFeedback.error('Could not open $url');
   }
 
   @override

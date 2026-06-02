@@ -11,6 +11,7 @@ import 'package:wcpredict/core/theme/app_colors.dart';
 import 'package:wcpredict/core/theme/app_radii.dart';
 import 'package:wcpredict/shared/providers/groups_provider.dart';
 import 'package:wcpredict/shared/widgets/app_sheet.dart';
+import 'package:wcpredict/shared/widgets/app_feedback.dart';
 import 'package:go_router/go_router.dart';
 
 class GroupDetailScreen extends ConsumerWidget {
@@ -84,17 +85,19 @@ class _GroupDetailBodyState extends ConsumerState<_GroupDetailBody>
     return user != null && user.id == widget.group.ownerId;
   }
 
-  void _copyCode(BuildContext context) {
+  void _copyCode() {
     Clipboard.setData(ClipboardData(text: widget.group.inviteCode ?? ''));
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Code copied!')),
-    );
+    AppFeedback.info('Invite code copied');
   }
 
   void _showSettings(BuildContext context) {
     showAppSheet<void>(
       context: context,
-      builder: (_) => _OwnerSettingsSheet(group: widget.group, ref: ref),
+      builder: (_) => _GroupSettingsSheet(
+        group: widget.group,
+        ref: ref,
+        isOwner: _isOwner,
+      ),
     );
   }
 
@@ -107,11 +110,11 @@ class _GroupDetailBodyState extends ConsumerState<_GroupDetailBody>
       appBar: AppBar(
         title: Text(group.name),
         actions: [
-          if (_isOwner)
-            IconButton(
-              icon: const Icon(Icons.settings_outlined),
-              onPressed: () => _showSettings(context),
-            ),
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: _isOwner ? 'Group settings' : 'Group options',
+            onPressed: () => _showSettings(context),
+          ),
         ],
         bottom: TabBar(
           controller: _tabCtrl,
@@ -164,7 +167,7 @@ class _GroupDetailBodyState extends ConsumerState<_GroupDetailBody>
                   ),
                   const SizedBox(height: 12),
                   GestureDetector(
-                    onTap: () => _copyCode(context),
+                    onTap: _copyCode,
                     child: Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 16, vertical: 8),
@@ -436,17 +439,22 @@ class _MemberRow extends StatelessWidget {
 
 // ---------------------------------------------------------------------------
 
-class _OwnerSettingsSheet extends ConsumerStatefulWidget {
-  const _OwnerSettingsSheet({required this.group, required this.ref});
+class _GroupSettingsSheet extends ConsumerStatefulWidget {
+  const _GroupSettingsSheet({
+    required this.group,
+    required this.ref,
+    required this.isOwner,
+  });
   final GroupModel group;
   final WidgetRef ref;
+  final bool isOwner;
 
   @override
-  ConsumerState<_OwnerSettingsSheet> createState() =>
-      _OwnerSettingsSheetState();
+  ConsumerState<_GroupSettingsSheet> createState() =>
+      _GroupSettingsSheetState();
 }
 
-class _OwnerSettingsSheetState extends ConsumerState<_OwnerSettingsSheet> {
+class _GroupSettingsSheetState extends ConsumerState<_GroupSettingsSheet> {
   final _nameCtrl = TextEditingController();
   bool _loading = false;
 
@@ -471,12 +479,11 @@ class _OwnerSettingsSheetState extends ConsumerState<_OwnerSettingsSheet> {
           .from('groups')
           .update({'name': newName}).eq('id', widget.group.id);
       ref.invalidate(myGroupsProvider);
-      if (mounted) Navigator.pop(context);
+      if (!mounted) return;
+      Navigator.pop(context);
+      AppFeedback.success('Group renamed to "$newName"');
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Error: $e')));
-      }
+      AppFeedback.error('Rename failed: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -490,39 +497,50 @@ class _OwnerSettingsSheetState extends ConsumerState<_OwnerSettingsSheet> {
           .from('groups')
           .update({'invite_code': newCode}).eq('id', widget.group.id);
       ref.invalidate(myGroupsProvider);
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('New code: $newCode')));
-        Navigator.pop(context);
-      }
+      if (!mounted) return;
+      Navigator.pop(context);
+      AppFeedback.success('New invite code: $newCode');
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Error: $e')));
-      }
+      AppFeedback.error('Could not regenerate code: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
   }
 
-  Future<void> _deleteGroup() async {
+  Future<bool> _confirmDestructive({
+    required String title,
+    required String body,
+    required String actionLabel,
+  }) async {
     final confirm = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('Delete group?'),
-        content: const Text(
-            'This will remove the group and all members. This cannot be undone.'),
+        title: Text(title),
+        content: Text(body),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
           TextButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: Text('Delete', style: TextStyle(color: AppColors.error))),
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(actionLabel,
+                style: TextStyle(color: AppColors.error)),
+          ),
         ],
       ),
     );
-    if (confirm != true) return;
+    return confirm == true;
+  }
+
+  Future<void> _deleteGroup() async {
+    final ok = await _confirmDestructive(
+      title: 'Delete group?',
+      body:
+          'This will remove the group and all members. This cannot be undone.',
+      actionLabel: 'Delete',
+    );
+    if (!ok || !mounted) return;
 
     setState(() => _loading = true);
     try {
@@ -539,11 +557,41 @@ class _OwnerSettingsSheetState extends ConsumerState<_OwnerSettingsSheet> {
       final router = GoRouter.of(context);
       Navigator.pop(context);
       router.go('/groups');
+      AppFeedback.success('Group "${widget.group.name}" deleted');
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Error: $e')));
-      }
+      AppFeedback.error('Delete failed: $e');
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _leaveGroup() async {
+    final userId = supabase.auth.currentUser?.id;
+    if (userId == null) return;
+
+    final ok = await _confirmDestructive(
+      title: 'Leave group?',
+      body: 'You will stop earning points in "${widget.group.name}" and '
+          'need a new invite code to rejoin.',
+      actionLabel: 'Leave',
+    );
+    if (!ok || !mounted) return;
+
+    setState(() => _loading = true);
+    try {
+      await supabase
+          .from('group_members')
+          .delete()
+          .eq('group_id', widget.group.id)
+          .eq('user_id', userId);
+      ref.invalidate(myGroupsProvider);
+      if (!mounted) return;
+      final router = GoRouter.of(context);
+      Navigator.pop(context);
+      router.go('/groups');
+      AppFeedback.success('You left "${widget.group.name}"');
+    } catch (e) {
+      AppFeedback.error('Could not leave group: $e');
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -552,39 +600,50 @@ class _OwnerSettingsSheetState extends ConsumerState<_OwnerSettingsSheet> {
   @override
   Widget build(BuildContext context) {
     return AppSheetBody(
-      title: 'Group Settings',
+      title: widget.isOwner ? 'Group Settings' : 'Group Options',
       child: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          TextField(
-            controller: _nameCtrl,
-            maxLength: kGroupNameMaxLength,
-            decoration: const InputDecoration(
-              labelText: 'Group name',
-              border: OutlineInputBorder(),
-            ),
-          ),
-          const SizedBox(height: 10),
-          FilledButton(
-            onPressed: _loading ? null : _rename,
-            child: const Text('Save Name'),
-          ),
-          const SizedBox(height: 8),
-          OutlinedButton.icon(
-            onPressed: _loading ? null : _regenerateCode,
-            icon: const Icon(Icons.refresh),
-            label: const Text('Regenerate Invite Code'),
-          ),
-          const SizedBox(height: 8),
-          TextButton.icon(
-            onPressed: _loading ? null : _deleteGroup,
-            icon: Icon(Icons.delete_outline, color: AppColors.error),
-            label:
-                Text('Delete Group', style: TextStyle(color: AppColors.error)),
-          ),
-        ],
+        children: widget.isOwner ? _ownerActions() : _memberActions(),
       ),
     );
   }
+
+  List<Widget> _ownerActions() => [
+        TextField(
+          controller: _nameCtrl,
+          maxLength: kGroupNameMaxLength,
+          decoration: const InputDecoration(
+            labelText: 'Group name',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 10),
+        FilledButton(
+          onPressed: _loading ? null : _rename,
+          child: const Text('Save Name'),
+        ),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          onPressed: _loading ? null : _regenerateCode,
+          icon: const Icon(Icons.refresh),
+          label: const Text('Regenerate Invite Code'),
+        ),
+        const SizedBox(height: 8),
+        TextButton.icon(
+          onPressed: _loading ? null : _deleteGroup,
+          icon: Icon(Icons.delete_outline, color: AppColors.error),
+          label: Text('Delete Group',
+              style: TextStyle(color: AppColors.error)),
+        ),
+      ];
+
+  List<Widget> _memberActions() => [
+        TextButton.icon(
+          onPressed: _loading ? null : _leaveGroup,
+          icon: Icon(Icons.logout, color: AppColors.error),
+          label: Text('Leave Group',
+              style: TextStyle(color: AppColors.error)),
+        ),
+      ];
 }

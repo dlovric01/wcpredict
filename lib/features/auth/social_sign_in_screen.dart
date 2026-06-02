@@ -12,6 +12,7 @@ import 'package:wcpredict/core/theme/app_colors.dart';
 import 'package:wcpredict/core/theme/app_radii.dart';
 import 'package:wcpredict/core/theme/app_spacing.dart';
 import 'package:wcpredict/shared/widgets/app_logo.dart';
+import 'package:wcpredict/shared/widgets/app_feedback.dart';
 class SocialSignInScreen extends StatefulWidget {
   const SocialSignInScreen({super.key});
 
@@ -97,18 +98,7 @@ class _SocialSignInScreenState extends State<SocialSignInScreen> {
     final message = _friendlyError(e);
     // Silent cancel — don't pester the user.
     if (message == null) return;
-    final theme = Theme.of(context);
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          content: Text(message),
-          backgroundColor: theme.colorScheme.error,
-          behavior: SnackBarBehavior.floating,
-          margin: const EdgeInsets.all(AppSpacing.md),
-          shape: RoundedRectangleBorder(borderRadius: AppRadii.cardRadius),
-        ),
-      );
+    AppFeedback.error(message);
   }
 
   /// Returns `null` for cancellations (no snackbar shown for those).

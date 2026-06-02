@@ -6,6 +6,7 @@ import 'core/logger.dart';
 import 'core/theme/app_colors.dart';
 import 'core/theme/app_theme.dart';
 import 'router.dart';
+import 'shared/widgets/app_feedback.dart';
 
 class WcPredictApp extends StatelessWidget {
   const WcPredictApp({super.key});
@@ -23,6 +24,7 @@ class WcPredictApp extends StatelessWidget {
         onTap: () => FocusManager.instance.primaryFocus?.unfocus(),
         child: MaterialApp.router(
           title: 'WC2026 Predict',
+          scaffoldMessengerKey: appMessengerKey,
           theme: appTheme,
           darkTheme: appTheme,
           themeMode: ThemeMode.dark,

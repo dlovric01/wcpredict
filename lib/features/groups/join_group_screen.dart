@@ -7,6 +7,7 @@ import 'package:wcpredict/core/theme/app_spacing.dart';
 import 'package:wcpredict/features/groups/invite_code.dart';
 import 'package:wcpredict/shared/providers/groups_provider.dart';
 import 'package:wcpredict/shared/widgets/app_sheet.dart';
+import 'package:wcpredict/shared/widgets/app_feedback.dart';
 
 Future<void> showJoinGroupSheet(BuildContext context, WidgetRef ref) {
   return showAppSheet<void>(
@@ -71,7 +72,9 @@ class _JoinGroupSheetState extends ConsumerState<_JoinGroupSheet> {
         if (e.code != '23505') rethrow;
       }
       widget.ref.invalidate(myGroupsProvider);
-      if (mounted) Navigator.pop(context);
+      if (!mounted) return;
+      Navigator.pop(context);
+      AppFeedback.success('Joined "${group['name']}"');
     } catch (e) {
       setState(() {
         _submitting = false;
