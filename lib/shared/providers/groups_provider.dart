@@ -6,10 +6,12 @@ import 'package:wcpredict/core/models/prediction_model.dart';
 import 'package:wcpredict/core/models/profile_model.dart';
 import 'package:wcpredict/core/supabase_client.dart';
 import 'package:wcpredict/shared/providers/auth_provider.dart';
+import 'package:wcpredict/shared/providers/mock_groups.dart';
 
 /// Groups the current user belongs to.
 final myGroupsProvider = FutureProvider<List<GroupModel>>((ref) async {
   final userId = ref.watch(currentUserIdProvider);
+  if (kMockGroups) return mockGroupsList(currentUserId: userId);
   if (userId == null) return [];
   final data = await supabase
       .from('groups')
@@ -26,7 +28,10 @@ final groupStandingsProvider =
     FutureProvider.family<List<GroupStandingModel>, String>((ref, groupId) async {
   // RLS-scoped: data depends on whether the current user is a member,
   // so reset the cache on sign-in/out.
-  ref.watch(currentUserIdProvider);
+  final userId = ref.watch(currentUserIdProvider);
+  if (kMockGroups) {
+    return mockGroupStandings(groupId: groupId, currentUserId: userId);
+  }
   final data = await supabase
       .from('group_standings')
       .select()
@@ -47,7 +52,10 @@ final groupMembersProvider =
     FutureProvider.family<List<ProfileModel>, String>((ref, groupId) async {
   // RLS-scoped: cleared on user change so account B never sees account
   // A's cached member list.
-  ref.watch(currentUserIdProvider);
+  final userId = ref.watch(currentUserIdProvider);
+  if (kMockGroups) {
+    return mockGroupMembers(groupId: groupId, currentUserId: userId);
+  }
   // Step 1: get user IDs for this group
   final memberData = await supabase
       .from('group_members')
