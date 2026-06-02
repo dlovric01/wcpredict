@@ -37,6 +37,7 @@ dependencies:
   cupertino_icons: ^1.0.8
   talker_flutter: ^5.1.16
   url_launcher: ^6.3.2
+  package_info_plus: ^8.0.0
 
 dev_dependencies:
   flutter_test:

@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:talker_flutter/talker_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:wcpredict/core/logger.dart';
 import 'package:wcpredict/core/legal_urls.dart';
 import 'package:wcpredict/core/models/prediction_model.dart';
@@ -63,6 +64,10 @@ final _myStatsProvider = FutureProvider<_PredictionStats>((ref) async {
     predictionCount: preds.length,
   );
 });
+
+/// Bundles the app's version + build number (cached for the session).
+final _packageInfoProvider =
+    FutureProvider<PackageInfo>((ref) => PackageInfo.fromPlatform());
 
 // ---------------------------------------------------------------------------
 // Screen
@@ -259,6 +264,30 @@ class ProfileScreen extends ConsumerWidget {
               ),
               onPressed: () => _confirmSignOut(context, ref),
               child: const Text('Sign out'),
+            ),
+            const SizedBox(height: 12),
+            // ── Version footer ───────────────────────────────────────────
+            // Reading via package_info_plus pulls the version straight from
+            // Info.plist / build.gradle, so a `pubspec.yaml` bump propagates
+            // without a manual sync. Reviewers and TestFlight users use this
+            // to identify the exact build when reporting issues.
+            Consumer(
+              builder: (context, ref, _) {
+                final info = ref.watch(_packageInfoProvider);
+                final text = info.maybeWhen(
+                  data: (i) => 'Version ${i.version} (${i.buildNumber})',
+                  orElse: () => ' ',
+                );
+                return Center(
+                  child: Text(
+                    text,
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: AppColors.onSurfaceMuted,
+                          fontFeatures: const [FontFeature.tabularFigures()],
+                        ),
+                  ),
+                );
+              },
             ),
             const SizedBox(height: 16),
           ],
