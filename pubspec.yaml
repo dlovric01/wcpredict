@@ -50,6 +50,12 @@ dev_dependencies:
   custom_lint: ^0.7.5
   riverpod_lint: ^2.6.5
   flutter_launcher_icons: ^0.14.3
+  # Transitive deps pulled in via supabase_flutter / flutter_test, but
+  # imported directly by test/features/predictions_visual_test.dart for
+  # `SharedPreferences.setMockInitialValues` + `@isTest`. Listed
+  # explicitly to silence `depend_on_referenced_packages`.
+  shared_preferences: ^2.3.0
+  meta: ^1.15.0
 
 flutter:
   uses-material-design: true
