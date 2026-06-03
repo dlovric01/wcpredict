@@ -63,6 +63,9 @@ supabase/.temp/
 supabase/.branches/
 
 # Stale debug screenshot
+
+# Flutter golden-test failure artifacts (regenerated each run)
+test/features/failures/
 flutter_01.png
 .worktrees/
 .mock-data/

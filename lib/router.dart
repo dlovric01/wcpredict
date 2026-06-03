@@ -10,6 +10,8 @@ import 'router_redirect.dart';
 import 'features/auth/auth_callback_screen.dart';
 import 'features/auth/social_sign_in_screen.dart';
 import 'features/dev/simulation_screen.dart';
+import 'features/dev/matches_preview_screen.dart';
+import 'features/dev/predictions_preview_screen.dart';
 import 'features/groups/group_detail_screen.dart';
 import 'features/groups/groups_list_screen.dart';
 import 'features/groups/user_predictions_screen.dart';
@@ -82,6 +84,31 @@ final appRouter = GoRouter(
       GoRoute(
         path: '/dev/simulate',
         builder: (_, __) => const SimulationScreen(),
+      ),
+    if (kDebugMode)
+      GoRoute(
+        path: '/dev/predictions-preview',
+        builder: (_, state) {
+          final raw = state.uri.queryParameters['scenario'];
+          final parsed = int.tryParse(raw ?? '');
+          // Scenarios are 1-indexed in the UI but stored 0-indexed.
+          // Clamp inside the screen so out-of-range query strings
+          // just land on the first scenario instead of crashing.
+          return PredictionsPreviewScreen(
+            initialIndex: parsed == null ? 0 : parsed - 1,
+          );
+        },
+      ),
+    if (kDebugMode)
+      GoRoute(
+        path: '/dev/matches-preview',
+        builder: (_, state) {
+          final raw = state.uri.queryParameters['scenario'];
+          final parsed = int.tryParse(raw ?? '');
+          return MatchesPreviewScreen(
+            initialIndex: parsed == null ? 0 : parsed - 1,
+          );
+        },
       ),
     GoRoute(
       path: '/rules',
