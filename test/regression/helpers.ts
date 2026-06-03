@@ -34,6 +34,7 @@ export const T = {
   MATCH_SCORING: 99_203, // used for scoring engine tests
   MATCH_ET: 99_204,     // extra-time / penalties test
   MATCH_KO: 99_205,     // future QF knockout match for booster tests
+  MATCH_REMINDER: 99_206, // synthetic match in [now+29m, now+31m] for reminder flow
 };
 
 export const TEST_DOMAIN = "wctest.invalid";
@@ -163,12 +164,26 @@ export async function insertTestFixtures(admin: SupabaseClient): Promise<void> {
 // ─── Teardown ─────────────────────────────────────────────────────────────────
 
 export async function teardownTestData(admin: SupabaseClient): Promise<void> {
-  const matchIds = [T.MATCH_FUTURE, T.MATCH_PAST, T.MATCH_SCORING, T.MATCH_ET, T.MATCH_KO];
+  const matchIds = [
+    T.MATCH_FUTURE,
+    T.MATCH_PAST,
+    T.MATCH_SCORING,
+    T.MATCH_ET,
+    T.MATCH_KO,
+    T.MATCH_REMINDER,
+    99_777, // throwaway used by "deleting a match cascades to match_lineups"
+  ];
 
   // predictions → match_events → matches → players → teams (foreign key order)
   await admin.from("predictions").delete().in("match_id", matchIds);
   await admin.from("match_events").delete().in("match_id", matchIds);
   await admin.from("round_boosters").delete().in("match_id", matchIds);
+  // Per-match lineup join table (migration 036). Cascades on match delete
+  // anyway, but explicit wipe is fast and idempotent across reruns.
+  await admin.from("match_lineups").delete().in("match_id", matchIds);
+  // New post-MVP tables (cascade via auth.users covers them when test users
+  // are deleted below, but explicit wipe by match id is faster and idempotent).
+  await admin.from("prediction_reminders_sent").delete().in("match_id", matchIds);
 
   // Tournament tables (no match-id FK, scope by test-user IDs implicitly via
   // auth.users cascade; the singleton tournament_results is also wiped).

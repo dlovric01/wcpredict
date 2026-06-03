@@ -1858,3 +1858,455 @@ describe("Tournament Predictions", () => {
     expect(data?.golden_boot_player_id).toBe(T.PLAYER_B1);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 11. DEVICE TOKENS — RLS owner-only + cascade on auth.users delete
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe("Device tokens", () => {
+  beforeEach(async () => {
+    // Wipe both test users' rows so each test starts clean.
+    await admin
+      .from("device_tokens")
+      .delete()
+      .in("user_id", [alice.userId, bob.userId]);
+  });
+
+  test("owner can insert their own token row", async () => {
+    const { error } = await alice.client.from("device_tokens").insert({
+      user_id: alice.userId,
+      token: "test-token-alice-ios",
+      platform: "ios",
+    });
+    expect(error).toBeNull();
+
+    // Verify via admin (RLS bypass).
+    const { data } = await admin
+      .from("device_tokens")
+      .select("user_id, token, platform")
+      .eq("user_id", alice.userId);
+    expect(data?.length).toBe(1);
+    expect(data?.[0]?.token).toBe("test-token-alice-ios");
+  });
+
+  test("owner cannot insert a row for another user", async () => {
+    // RLS WITH CHECK on insert blocks this even though the row would
+    // be visible to alice via her own SELECT policy (only owner can
+    // write).
+    const { error } = await alice.client.from("device_tokens").insert({
+      user_id: bob.userId,
+      token: "test-token-spoofed",
+      platform: "android",
+    });
+    expect(error).not.toBeNull();
+    expect(error!.message).toMatch(/row-level security|new row violates/i);
+  });
+
+  test("platform check constraint rejects unknown values", async () => {
+    const { error } = await alice.client.from("device_tokens").insert({
+      user_id: alice.userId,
+      token: "test-token-bad-platform",
+      platform: "web", // not in ('ios','android')
+    });
+    expect(error).not.toBeNull();
+    expect(error!.message).toMatch(/check constraint|device_tokens_platform_check/i);
+  });
+
+  test("upsert by (user_id, token) updates `updated_at`", async () => {
+    const token = "test-token-alice-refresh";
+    await alice.client.from("device_tokens").insert({
+      user_id: alice.userId,
+      token,
+      platform: "ios",
+    });
+    const { data: first } = await admin
+      .from("device_tokens")
+      .select("updated_at")
+      .eq("user_id", alice.userId)
+      .eq("token", token)
+      .single();
+
+    // Wait long enough that now() advances on the trigger.
+    await sleep(1100);
+
+    const { error: upsertErr } = await alice.client
+      .from("device_tokens")
+      .upsert(
+        { user_id: alice.userId, token, platform: "ios" },
+        { onConflict: "user_id,token" },
+      );
+    expect(upsertErr).toBeNull();
+
+    const { data: second } = await admin
+      .from("device_tokens")
+      .select("updated_at")
+      .eq("user_id", alice.userId)
+      .eq("token", token)
+      .single();
+    expect(new Date(second!.updated_at).getTime()).toBeGreaterThan(
+      new Date(first!.updated_at).getTime(),
+    );
+  });
+
+  test("cascade on auth.users delete removes token rows", async () => {
+    // Use charlie because the test order shouldn't break alice/bob for later blocks.
+    await admin.from("device_tokens").insert({
+      user_id: charlie.userId,
+      token: "test-token-charlie-doomed",
+      platform: "android",
+    });
+    const { data: before } = await admin
+      .from("device_tokens")
+      .select("token")
+      .eq("user_id", charlie.userId);
+    expect(before?.length).toBe(1);
+
+    // Delete charlie + re-create for the rest of the suite. Order matters:
+    // other describe blocks reuse `charlie` so we must restore the binding.
+    await admin.auth.admin.deleteUser(charlie.userId);
+
+    const { data: after } = await admin
+      .from("device_tokens")
+      .select("token")
+      .eq("user_id", charlie.userId);
+    expect(after?.length ?? 0).toBe(0);
+
+    // Restore charlie so subsequent blocks (if any reference him) still work.
+    charlie = await userClient("charlie");
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 12. PREDICT REMINDERS — anti-join correctness + idempotency
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// These tests invoke the deployed `notify_predict_reminders` edge function
+// against the production project. Real FCM HTTP calls fire for any matching
+// device tokens; we use deliberately invalid tokens so FCM rejects with 404,
+// which is logged but does not change `prediction_reminders_sent` semantics
+// (the function writes the log row regardless of FCM HTTP result).
+
+describe("Predict reminders", () => {
+  const FUNCTION_URL = `${SUPABASE_URL}/functions/v1/notify_predict_reminders`;
+
+  async function invokeFn(): Promise<{ ok: boolean; matches: number; sends: number; skipped_matches: number }> {
+    const res = await fetch(FUNCTION_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${ANON_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: "{}",
+    });
+    expect(res.status).toBe(200);
+    return (await res.json()) as any;
+  }
+
+  async function seedReminderFixture(opts: {
+    kickoffOffsetMinutes: number;
+    withPrediction?: boolean;
+  }): Promise<void> {
+    const kickoff = new Date(
+      Date.now() + opts.kickoffOffsetMinutes * 60 * 1000,
+    ).toISOString();
+
+    await admin.from("matches").upsert({
+      id: T.MATCH_REMINDER,
+      round: "Matchday 1",
+      team1_id: T.TEAM_A,
+      team2_id: T.TEAM_B,
+      kickoff_time: kickoff,
+      status: "scheduled",
+    });
+
+    await admin
+      .from("device_tokens")
+      .delete()
+      .eq("user_id", alice.userId);
+    await admin.from("device_tokens").insert({
+      user_id: alice.userId,
+      token: "fake-fcm-token-regression-alice",
+      platform: "ios",
+    });
+
+    await admin
+      .from("prediction_reminders_sent")
+      .delete()
+      .eq("match_id", T.MATCH_REMINDER);
+    await admin
+      .from("predictions")
+      .delete()
+      .eq("match_id", T.MATCH_REMINDER);
+
+    if (opts.withPrediction) {
+      await admin.from("predictions").insert({
+        user_id: alice.userId,
+        match_id: T.MATCH_REMINDER,
+        predicted_team1: 1,
+        predicted_team2: 0,
+      });
+    }
+  }
+
+  test("no candidate matches → matches:0, no writes", async () => {
+    // Wipe any leftover synthetic match so the window is empty.
+    await admin.from("matches").delete().eq("id", T.MATCH_REMINDER);
+    const result = await invokeFn();
+    expect(result.ok).toBe(true);
+    expect(result.matches).toBe(0);
+  });
+
+  test("one candidate user → exactly one reminders_sent row", async () => {
+      await seedReminderFixture({ kickoffOffsetMinutes: 30 });
+      const first = await invokeFn();
+      expect(first.matches).toBeGreaterThanOrEqual(1);
+  
+      // Cron fans out to every registered token (dev-seed users included),
+      // so count only Alice's row to lock the per-user idempotency contract.
+      const { data: rows } = await admin
+        .from("prediction_reminders_sent")
+        .select("user_id, match_id")
+        .eq("match_id", T.MATCH_REMINDER)
+        .eq("user_id", alice.userId);
+      expect(rows?.length).toBe(1);
+    });
+
+  test("second invocation in the same window does not re-send", async () => {
+      await seedReminderFixture({ kickoffOffsetMinutes: 30 });
+      await invokeFn();
+      await invokeFn();
+  
+      const { data: rows } = await admin
+        .from("prediction_reminders_sent")
+        .select("user_id, sent_at")
+        .eq("match_id", T.MATCH_REMINDER)
+        .eq("user_id", alice.userId);
+      expect(rows?.length).toBe(1); // still exactly one for alice
+    });
+
+  test("user with a prediction is excluded — no row added", async () => {
+      await seedReminderFixture({
+        kickoffOffsetMinutes: 30,
+        withPrediction: true,
+      });
+      await invokeFn();
+  
+      const { data: rows } = await admin
+        .from("prediction_reminders_sent")
+        .select("user_id")
+        .eq("match_id", T.MATCH_REMINDER)
+        .eq("user_id", alice.userId);
+      expect(rows?.length ?? 0).toBe(0);
+    });
+
+  test("match outside [now+29m, now+31m] window is ignored", async () => {
+      // Kickoff in 5 minutes — too soon for the predict-reminder window.
+      await seedReminderFixture({ kickoffOffsetMinutes: 5 });
+      const result = await invokeFn();
+      const { data: rows } = await admin
+        .from("prediction_reminders_sent")
+        .select("user_id")
+        .eq("match_id", T.MATCH_REMINDER)
+        .eq("user_id", alice.userId);
+      expect(rows?.length ?? 0).toBe(0);
+      expect(result.ok).toBe(true);
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 13. POLL LINEUPS WINDOW — formation guard semantics
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// We don't invoke the live `poll_lineups` edge function because it would
+// make real api-sports.io calls (rate-limited, billed). Instead we assert
+// the *guard logic* directly: a match with both formations populated must
+// be filterable out by the same predicate the edge function uses
+// (`formation_team1 IS NOT NULL AND formation_team2 IS NOT NULL`), and a
+// match with NULL formations must remain a candidate. This locks the
+// schema contract that the edge function depends on; any migration that
+// drops or renames those columns breaks here loudly.
+
+describe("Poll lineups guard", () => {
+  test("match with both formations populated is filtered by guard predicate", async () => {
+    const future = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+    await admin.from("matches").upsert({
+      id: T.MATCH_REMINDER,
+      round: "Matchday 1",
+      team1_id: T.TEAM_A,
+      team2_id: T.TEAM_B,
+      kickoff_time: future,
+      status: "scheduled",
+      formation_team1: "4-3-3",
+      formation_team2: "3-5-2",
+    });
+
+    // Same predicate the edge function uses to decide skip-vs-fetch.
+    const { data } = await admin
+      .from("matches")
+      .select("id, formation_team1, formation_team2")
+      .eq("id", T.MATCH_REMINDER)
+      .not("formation_team1", "is", null)
+      .not("formation_team2", "is", null);
+    expect(data?.length).toBe(1);
+  });
+
+  test("match missing one formation is NOT filtered out", async () => {
+    const future = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+    await admin.from("matches").upsert({
+      id: T.MATCH_REMINDER,
+      round: "Matchday 1",
+      team1_id: T.TEAM_A,
+      team2_id: T.TEAM_B,
+      kickoff_time: future,
+      status: "scheduled",
+      formation_team1: "4-3-3",
+      formation_team2: null,
+    });
+
+    const { data } = await admin
+      .from("matches")
+      .select("id")
+      .eq("id", T.MATCH_REMINDER)
+      .not("formation_team1", "is", null)
+      .not("formation_team2", "is", null);
+    expect(data?.length ?? 0).toBe(0);
+  });
+
+  test("window predicate matches only candidates in [now+5m, now+45m]", async () => {
+    // Insert at the upper-bound edge (now+44m) — should be picked up.
+    const at44 = new Date(Date.now() + 44 * 60 * 1000).toISOString();
+    await admin.from("matches").upsert({
+      id: T.MATCH_REMINDER,
+      round: "Matchday 1",
+      team1_id: T.TEAM_A,
+      team2_id: T.TEAM_B,
+      kickoff_time: at44,
+      status: "scheduled",
+      formation_team1: null,
+      formation_team2: null,
+    });
+
+    const windowStart = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+    const windowEnd = new Date(Date.now() + 45 * 60 * 1000).toISOString();
+
+    const { data } = await admin
+      .from("matches")
+      .select("id")
+      .eq("id", T.MATCH_REMINDER)
+      .eq("status", "scheduled")
+      .gte("kickoff_time", windowStart)
+      .lte("kickoff_time", windowEnd);
+    expect(data?.length).toBe(1);
+
+    // Move to +50m → falls outside the window.
+    const at50 = new Date(Date.now() + 50 * 60 * 1000).toISOString();
+    await admin
+      .from("matches")
+      .update({ kickoff_time: at50 })
+      .eq("id", T.MATCH_REMINDER);
+
+    const { data: outside } = await admin
+      .from("matches")
+      .select("id")
+      .eq("id", T.MATCH_REMINDER)
+      .eq("status", "scheduled")
+      .gte("kickoff_time", windowStart)
+      .lte("kickoff_time", windowEnd);
+    expect(outside?.length ?? 0).toBe(0);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 14. MATCH LINEUPS — per-fixture matchday squad table (migration 036)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Locks the contract the Teams tab depends on: the global `players`
+// table is the entire roster (often 25-35 per team), so the screen must
+// read from `match_lineups` instead. Substitutes that show up should be
+// the actual matchday bench (~7-15), never every non-starter on the team.
+
+describe("Match lineups", () => {
+  beforeEach(async () => {
+    // Reset state between tests so each one owns its fixture's lineup rows.
+    await admin.from("match_lineups").delete().eq("match_id", T.MATCH_FUTURE);
+  });
+
+  test("authenticated user can read match_lineups rows", async () => {
+    await admin.from("match_lineups").insert([
+      { match_id: T.MATCH_FUTURE, team_id: T.TEAM_A, player_id: T.PLAYER_A1, is_starter: true,  grid: "1:1" },
+      { match_id: T.MATCH_FUTURE, team_id: T.TEAM_A, player_id: T.PLAYER_A2, is_starter: false, grid: null  },
+      { match_id: T.MATCH_FUTURE, team_id: T.TEAM_B, player_id: T.PLAYER_B1, is_starter: true,  grid: "1:1" },
+    ]);
+
+    const { data, error } = await alice.client
+      .from("match_lineups")
+      .select("player_id, team_id, is_starter, grid")
+      .eq("match_id", T.MATCH_FUTURE)
+      .order("player_id");
+    expect(error).toBeNull();
+    expect(data?.length).toBe(3);
+    expect(data?.[0]?.is_starter).toBe(true);
+    expect(data?.[1]?.is_starter).toBe(false);
+  });
+
+  test("anon user cannot read match_lineups (authenticated-only policy)", async () => {
+    await admin.from("match_lineups").insert({
+      match_id: T.MATCH_FUTURE, team_id: T.TEAM_A, player_id: T.PLAYER_A1, is_starter: true,
+    });
+    const anon = anonClient();
+    const { data } = await anon
+      .from("match_lineups")
+      .select("player_id")
+      .eq("match_id", T.MATCH_FUTURE);
+    // RLS denies anon: empty result, not 4xx (PostgREST treats it as no rows).
+    expect(data?.length ?? 0).toBe(0);
+  });
+
+  test("non-service-role user cannot insert into match_lineups", async () => {
+    const { error } = await alice.client.from("match_lineups").insert({
+      match_id: T.MATCH_FUTURE,
+      team_id: T.TEAM_A,
+      player_id: T.PLAYER_A1,
+      is_starter: true,
+    });
+    // RLS: no write policy → 4xx error
+    expect(error).not.toBeNull();
+  });
+
+  test("(match_id, player_id) is the primary key — duplicate insert fails", async () => {
+    await admin.from("match_lineups").insert({
+      match_id: T.MATCH_FUTURE, team_id: T.TEAM_A, player_id: T.PLAYER_A1, is_starter: true,
+    });
+    const { error } = await admin.from("match_lineups").insert({
+      match_id: T.MATCH_FUTURE, team_id: T.TEAM_A, player_id: T.PLAYER_A1, is_starter: false,
+    });
+    expect(error).not.toBeNull();
+  });
+
+  test("deleting a match cascades to match_lineups", async () => {
+    // Use a throwaway match so the parent matches row delete doesn't
+    // disturb other tests that rely on T.MATCH_FUTURE.
+    const throwawayId = 99_777;
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    await admin.from("matches").upsert({
+      id: throwawayId,
+      round: "Matchday 1",
+      team1_id: T.TEAM_A,
+      team2_id: T.TEAM_B,
+      kickoff_time: future,
+      status: "scheduled",
+    });
+    await admin.from("match_lineups").insert([
+      { match_id: throwawayId, team_id: T.TEAM_A, player_id: T.PLAYER_A1, is_starter: true },
+      { match_id: throwawayId, team_id: T.TEAM_B, player_id: T.PLAYER_B1, is_starter: true },
+    ]);
+
+    await admin.from("matches").delete().eq("id", throwawayId);
+
+    const { data } = await admin
+      .from("match_lineups")
+      .select("player_id")
+      .eq("match_id", throwawayId);
+    expect(data?.length ?? 0).toBe(0);
+  });
+});

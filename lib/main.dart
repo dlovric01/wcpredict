@@ -10,6 +10,9 @@ import 'app.dart';
 import 'core/logger.dart';
 import 'core/provider_observer.dart';
 import 'core/supabase_client.dart';
+import 'core/push_notifications.dart';
+import 'router.dart' show appRouter;
+import 'package:supabase_flutter/supabase_flutter.dart' as sb show AuthChangeEvent;
 
 /// Optional debug-only auto-login. Set via:
 ///   --dart-define=DEV_AUTOLOGIN_USER=alice
@@ -62,6 +65,41 @@ void main() async {
       };
 
       await initSupabase();
+      pushNotifications = PushNotifications(router: appRouter);
+      await pushNotifications!.initialize();
+
+      // Register the existing session's user — covers the "user opens the
+      // app while already signed in" path that AuthRepository's per-method
+      // hooks miss (those only fire on a fresh sign-in flow).
+      final restoredUid = supabase.auth.currentUser?.id;
+      if (restoredUid != null) {
+        // Fire-and-forget so app boot isn't blocked on FCM token fetch.
+        unawaited(pushNotifications!.registerForUser(restoredUid));
+      }
+
+      // Keep token registration in lockstep with auth lifecycle for the
+      // duration of the process. Covers: silent session restore after the
+      // app was killed, sign-in via a path that bypassed AuthRepository,
+      // and account switches.
+      supabase.auth.onAuthStateChange.listen((state) {
+        final uid = state.session?.user.id;
+        switch (state.event) {
+          case sb.AuthChangeEvent.signedIn:
+          case sb.AuthChangeEvent.initialSession:
+          case sb.AuthChangeEvent.tokenRefreshed:
+          case sb.AuthChangeEvent.userUpdated:
+            if (uid != null) {
+              unawaited(pushNotifications!.registerForUser(uid));
+            }
+            break;
+          case sb.AuthChangeEvent.signedOut:
+            unawaited(pushNotifications!.unregisterForCurrentDevice());
+            break;
+          default:
+            break;
+        }
+      });
+
       await _devAutoLogin();
       runApp(
         ProviderScope(

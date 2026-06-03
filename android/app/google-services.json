@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "1039279375894",
+    "project_id": "wcpredict-2026",
+    "storage_bucket": "wcpredict-2026.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1039279375894:android:b4a43e36a0739600f89737",
+        "android_client_info": {
+          "package_name": "com.dlovric.wcpredict2026"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDw-agfgk-tzGubw_Q6CL7hEoxnsVtqEdM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

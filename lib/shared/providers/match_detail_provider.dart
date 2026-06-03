@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:wcpredict/core/models/match_event_model.dart';
 import 'package:wcpredict/core/models/match_model.dart';
 import 'package:wcpredict/core/supabase_client.dart';
+import 'package:wcpredict/core/models/player_model.dart';
 
 /// Single match by id — joins both teams with their players.
 ///
@@ -22,6 +23,42 @@ final matchByIdProvider =
       .eq('id', id)
       .single();
   return MatchModel.fromJson(data);
+});
+
+/// Matchday squad for a single fixture — what api-sports.io
+/// `/fixtures/lineups` returned for THIS fixture (11 starters + bench).
+///
+/// Distinct from `match.team1.players` / `match.team2.players`, which
+/// expose the full season-long roster (~25-35 per team) used by the
+/// goalscorer picker. The Teams tab uses this provider exclusively so
+/// non-matchday reserves never show up in the "Substitutes" section.
+///
+/// Returns an empty list when `match_lineups` has no rows for the
+/// fixture yet (pre-poll_lineups or for matches outside the 45-min
+/// window). Callers should gate with `teamsTabLineupReady(match)`
+/// before showing the roster UI.
+final matchLineupProvider =
+    FutureProvider.autoDispose.family<List<PlayerModel>, int>((ref, matchId) async {
+  final rows = await supabase
+      .from('match_lineups')
+      .select('is_starter, grid, players(id, team_id, name, position, jersey_number)')
+      .eq('match_id', matchId);
+  return rows
+      .map((row) {
+        final p = row['players'] as Map<String, dynamic>?;
+        if (p == null) return null;
+        return PlayerModel(
+          id: (p['id'] as num).toInt(),
+          teamId: (p['team_id'] as num).toInt(),
+          name: p['name'] as String,
+          position: p['position'] as String?,
+          jerseyNumber: (p['jersey_number'] as num?)?.toInt(),
+          grid: row['grid'] as String?,
+          isStarter: (row['is_starter'] as bool?) ?? true,
+        );
+      })
+      .whereType<PlayerModel>()
+      .toList();
 });
 
 /// Events for a match — non-realtime one-shot. Prefer

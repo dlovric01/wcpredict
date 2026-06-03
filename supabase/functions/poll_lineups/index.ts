@@ -21,15 +21,16 @@ Deno.serve(async (req) => {
   try {
     const now = new Date();
 
-    // Window: matches kicking off between now+5 min and now+55 min.
-    // Wide enough to retry every minute for ~50 minutes; lineups are typically
-    // confirmed by T-60 so T-55 is the earliest useful attempt.
+    // Window: matches kicking off between now+5 min and now+45 min.
+    // Lineups are typically confirmed by T-60 so T-45 is the earliest reliably
+    // useful attempt; the lower bound covers cron drift after kickoff has
+    // passed but before the live-events poller starts.
     const windowStart = new Date(now.getTime() +  5 * 60 * 1000).toISOString();
-    const windowEnd   = new Date(now.getTime() + 55 * 60 * 1000).toISOString();
+    const windowEnd   = new Date(now.getTime() + 45 * 60 * 1000).toISOString();
 
     const { data: upcoming } = await supabaseAdmin
       .from('matches')
-      .select('id, team1_id, team2_id')
+      .select('id, team1_id, team2_id, formation_team1, formation_team2')
       .eq('status', 'scheduled')
       .gte('kickoff_time', windowStart)
       .lte('kickoff_time', windowEnd);
@@ -44,17 +45,13 @@ Deno.serve(async (req) => {
     let matchesPopulated = 0;
 
     for (const match of upcoming) {
-      // Guard: if both teams already have starting-XI players with grid positions,
-      // the lineup for this match is already populated — skip to save API quota.
-      const { count } = await supabaseAdmin
-        .from('players')
-        .select('id', { count: 'exact', head: true })
-        .in('team_id', [match.team1_id, match.team2_id].filter(Boolean))
-        .eq('is_starter', true)
-        .not('grid', 'is', null);
-
-      if ((count ?? 0) >= 18) {
-        // Both XIs already stored (11 × 2 = 22 minimum, 18 is a safe threshold)
+      // Guard: skip when both formations are already stored. More reliable than
+      // counting players (which are upserted by `id`, so a previous match's
+      // lineup can leave stale rows that satisfy a count check for the wrong
+      // fixture). The match row's formation columns only flip non-null once
+      // this function has successfully ingested a lineup payload for *this*
+      // fixture, making it a per-match idempotency marker.
+      if (match.formation_team1 && match.formation_team2) {
         continue;
       }
 
@@ -67,6 +64,7 @@ Deno.serve(async (req) => {
       if (lineups.length === 0) continue; // not confirmed yet — retry next minute
 
       const playerRows: object[] = [];
+      const lineupRows: object[] = [];
       const formations: Record<number, string> = {};
 
       for (const lineup of lineups) {
@@ -85,6 +83,13 @@ Deno.serve(async (req) => {
             grid: p.grid ?? null,
             is_starter: true,
           });
+          lineupRows.push({
+            match_id: match.id,
+            team_id: teamId,
+            player_id: p.id,
+            is_starter: true,
+            grid: p.grid ?? null,
+          });
         }
 
         for (const entry of lineup.substitutes ?? []) {
@@ -99,6 +104,13 @@ Deno.serve(async (req) => {
             grid: null,
             is_starter: false,
           });
+          lineupRows.push({
+            match_id: match.id,
+            team_id: teamId,
+            player_id: p.id,
+            is_starter: false,
+            grid: null,
+          });
         }
       }
 
@@ -107,6 +119,20 @@ Deno.serve(async (req) => {
           .from('players')
           .upsert(playerRows, { onConflict: 'id', ignoreDuplicates: false });
         if (!error) playersUpserted += playerRows.length;
+      }
+
+      // Replace the per-match lineup atomically: delete-then-insert. The
+      // matchday squad shape (11 starters + N subs) is owned by THIS
+      // fixture and must not bleed across re-runs (e.g. an in-window
+      // re-poll after a last-minute starter change).
+      if (lineupRows.length > 0) {
+        await supabaseAdmin
+          .from('match_lineups')
+          .delete()
+          .eq('match_id', match.id);
+        await supabaseAdmin
+          .from('match_lineups')
+          .insert(lineupRows);
       }
 
       // Store formations on the match row so the pitch UI can display them.

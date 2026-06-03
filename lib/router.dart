@@ -73,8 +73,10 @@ final appRouter = GoRouter(
     // ── Detail routes (above the shell, with back button) ───────────────────
     GoRoute(
       path: '/matches/:matchId',
-      builder: (_, state) =>
-          MatchDetailScreen(matchId: int.parse(state.pathParameters['matchId']!)),
+      builder: (_, state) => MatchDetailScreen(
+        matchId: int.parse(state.pathParameters['matchId']!),
+        initialTab: state.uri.queryParameters['tab'],
+      ),
     ),
     if (kDebugMode)
       GoRoute(

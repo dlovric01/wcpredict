@@ -122,6 +122,33 @@ class _SimulationScreenState extends ConsumerState<SimulationScreen> {
     }
   }
 
+  Future<void> _sendTestPush() async {
+    setState(() { _loading = true; _error = null; });
+    try {
+      final res = await supabase.functions.invoke(
+        'notify_predict_reminders',
+        body: const <String, dynamic>{},
+      );
+      _addLog('notify_predict_reminders → ${res.status}: ${res.data}');
+    } catch (e) {
+      setState(() => _error = e.toString());
+    } finally {
+      setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _resetRemindersLog() async {
+    setState(() { _loading = true; _error = null; });
+    try {
+      final deleted = await supabase.rpc('dev_reset_reminders');
+      _addLog('dev_reset_reminders → cleared $deleted row(s)');
+    } catch (e) {
+      setState(() => _error = e.toString());
+    } finally {
+      setState(() => _loading = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -195,6 +222,35 @@ class _SimulationScreenState extends ConsumerState<SimulationScreen> {
               child: const Text('Cleanup — delete test data'),
             ),
           ],
+
+          // ── Predict-reminder dev tools ───────────────────────────────────
+          const Divider(color: AppColors.outline, height: 32),
+          Text(
+            'Predict reminders',
+            style: tt.labelLarge?.copyWith(color: AppColors.onSurfaceVariant),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed: _loading ? null : _sendTestPush,
+            icon: const Icon(Icons.notifications_active_outlined),
+            label: const Text('Send test push (notify_predict_reminders)'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.primary,
+              side: BorderSide(color: AppColors.primary.withValues(alpha: 0.5)),
+              minimumSize: const Size.fromHeight(48),
+              shape: RoundedRectangleBorder(borderRadius: AppRadii.pillRadius),
+            ),
+          ),
+          const SizedBox(height: 8),
+          TextButton.icon(
+            onPressed: _loading ? null : _resetRemindersLog,
+            icon: const Icon(Icons.restart_alt),
+            label: const Text('Reset reminders log (this user only)'),
+            style: TextButton.styleFrom(
+              foregroundColor: AppColors.onSurfaceVariant,
+              minimumSize: const Size.fromHeight(44),
+            ),
+          ),
 
           const SizedBox(height: 24),
 

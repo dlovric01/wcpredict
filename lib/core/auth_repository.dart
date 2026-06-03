@@ -9,6 +9,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'logger.dart';
 import 'supabase_client.dart';
+import 'push_notifications.dart';
 
 class AuthRepository {
   User? get currentUser => supabase.auth.currentUser;
@@ -63,8 +64,8 @@ class AuthRepository {
         .where((s) => s != null && s.isNotEmpty)
         .join(' ')
         .trim();
-
     await _ensureProfile(displayNameOverride: displayName.isEmpty ? null : displayName);
+    await _registerPushForCurrentUser();
     return response;
   }
 
@@ -91,18 +92,33 @@ class AuthRepository {
       idToken: idToken,
       accessToken: accessToken,
     );
-
     await _ensureProfile();
+    await _registerPushForCurrentUser();
     return response;
   }
 
   Future<void> signOut() async {
+    try {
+      await pushNotifications?.unregisterForCurrentDevice();
+    } catch (_) {
+      // best-effort — token cleanup is non-essential
+    }
     try {
       await _googleSignIn.signOut();
     } catch (_) {
       // ignore — user may not have signed in with Google
     }
     await supabase.auth.signOut(scope: SignOutScope.local);
+  }
+
+  Future<void> _registerPushForCurrentUser() async {
+    final uid = supabase.auth.currentUser?.id;
+    if (uid == null) return;
+    try {
+      await pushNotifications?.registerForUser(uid);
+    } catch (e, st) {
+      talker.handle(e, st, 'Push registration failed');
+    }
   }
 
   Future<void> updateDisplayName(String name) async {

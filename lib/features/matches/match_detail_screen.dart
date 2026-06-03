@@ -16,12 +16,16 @@ import 'package:wcpredict/features/matches/predict_logic.dart';
 import 'package:wcpredict/features/rules/rules_screen.dart';
 import 'package:wcpredict/features/matches/first_team_picker.dart';
 import 'package:wcpredict/features/matches/live_events_widget.dart';
+import 'package:wcpredict/features/matches/live_scoring.dart';
 import 'package:wcpredict/shared/providers/match_detail_provider.dart';
 import 'package:wcpredict/shared/providers/matches_provider.dart';
+import 'package:wcpredict/shared/providers/match_others_provider.dart';
 import 'package:wcpredict/shared/utils/live_minute.dart';
 import 'package:wcpredict/shared/utils/score_format.dart';
+import 'package:wcpredict/shared/utils/player_name_format.dart';
 import 'package:wcpredict/shared/providers/predictions_provider.dart';
 import 'package:wcpredict/shared/widgets/team_flag.dart';
+import 'package:wcpredict/shared/widgets/countdown_pill.dart';
 import 'package:wcpredict/shared/widgets/verdict_pill.dart';
 import 'package:wcpredict/shared/providers/boosters_provider.dart';
 import 'package:wcpredict/shared/widgets/app_sheet.dart';
@@ -32,8 +36,13 @@ import 'package:wcpredict/shared/widgets/app_feedback.dart';
 // ---------------------------------------------------------------------------
 
 class MatchDetailScreen extends ConsumerStatefulWidget {
-  const MatchDetailScreen({super.key, required this.matchId});
+  const MatchDetailScreen({super.key, required this.matchId, this.initialTab});
   final int matchId;
+  /// Optional dev/test override: one of `overview` / `predict` / `teams` /
+  /// `others`. When non-null, takes precedence over the auto-pick logic
+  /// in [_setInitialTab]. Wired through the `/matches/:id?tab=teams`
+  /// query parameter — used to drive the simulator past TCC-blocked taps.
+  final String? initialTab;
 
   @override
   ConsumerState<MatchDetailScreen> createState() => _MatchDetailScreenState();
@@ -44,10 +53,23 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen>
   late final TabController _tabController;
   bool _initialTabSet = false;
 
+  static const Map<String, int> _tabIndexByName = {
+    'overview': 0,
+    'predict': 1,
+    'teams': 2,
+    'others': 3,
+  };
+
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 3, vsync: this);
+    _tabController = TabController(length: 4, vsync: this);
+    final override = widget.initialTab?.toLowerCase();
+    final idx = override == null ? null : _tabIndexByName[override];
+    if (idx != null) {
+      _tabController.index = idx;
+      _initialTabSet = true;
+    }
   }
 
   @override
@@ -136,6 +158,7 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen>
                   Tab(text: 'OVERVIEW'),
                   Tab(text: 'PREDICT'),
                   Tab(text: 'TEAMS'),
+                  Tab(text: 'OTHERS'),
                 ],
                 labelColor: AppColors.primary,
                 unselectedLabelColor: AppColors.onSurfaceMuted,
@@ -166,6 +189,7 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen>
                       onSaved: () => _tabController.animateTo(0),
                     ),
                     _TeamsTab(match: match),
+                    _OthersTab(match: match, matchId: widget.matchId),
                   ],
                 ),
               ),
@@ -1255,15 +1279,9 @@ class _PredictTabState extends ConsumerState<_PredictTab> {
 // Teams Tab
 // ---------------------------------------------------------------------------
 
-class _TeamsTab extends StatelessWidget {
+class _TeamsTab extends ConsumerWidget {
   const _TeamsTab({required this.match});
   final MatchModel match;
-
-  bool get _hasPlayers {
-    final t1 = match.team1?.players;
-    final t2 = match.team2?.players;
-    return (t1 != null && t1.isNotEmpty) || (t2 != null && t2.isNotEmpty);
-  }
 
   /// Sort order: GK → DEF → MID → FWD → unknown; starters before subs.
   static int _playerSort(PlayerModel a, PlayerModel b) {
@@ -1302,78 +1320,293 @@ class _TeamsTab extends StatelessWidget {
       return 4;
     }
 
-    // Starters first
     if (a.isStarter != b.isStarter) return a.isStarter ? -1 : 1;
-    // Then by position group
     final cmp = posRank(a).compareTo(posRank(b));
     if (cmp != 0) return cmp;
-    // Then by jersey number
     final na = a.jerseyNumber ?? 999;
     final nb = b.jerseyNumber ?? 999;
     return na.compareTo(nb);
   }
 
   @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+  Widget build(BuildContext context, WidgetRef ref) {
+    final lineupAsync = ref.watch(matchLineupProvider(match.id));
 
-    if (!_hasPlayers) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Symbols.group,
-                size: 40, color: AppColors.onSurfaceMuted),
-            const SizedBox(height: 12),
-            Text(
-              'Lineups not yet announced',
-              style: theme.textTheme.bodyMedium
-                  ?.copyWith(color: AppColors.onSurfaceMuted),
-            ),
-          ],
-        ),
+    // Loading: only show a spinner while we have nothing else to fall back
+    // on. If the legacy `team.players` roster is already present, render it
+    // immediately so the user isn't staring at an empty screen waiting for
+    // a per-match lineup row count.
+    if (lineupAsync.isLoading) {
+      final t1Fallback = match.team1?.players ?? const <PlayerModel>[];
+      final t2Fallback = match.team2?.players ?? const <PlayerModel>[];
+      if (t1Fallback.isEmpty && t2Fallback.isEmpty) {
+        return const Center(
+          child: Padding(
+            padding: EdgeInsets.all(32),
+            child: CircularProgressIndicator(color: AppColors.primary),
+          ),
+        );
+      }
+      return _buildRoster(context, const <PlayerModel>[]);
+    }
+
+    if (lineupAsync.hasError) {
+      return _TabEmptyState(
+        icon: Symbols.group,
+        primaryText: 'Could not load lineup.',
+        secondaryText: '${lineupAsync.error}',
       );
     }
 
-    final t1Players = [...(match.team1?.players ?? <PlayerModel>[])]
-      ..sort(_playerSort);
-    final t2Players = [...(match.team2?.players ?? <PlayerModel>[])]
-      ..sort(_playerSort);
+    return _buildRoster(context, lineupAsync.requireValue);
+  }
 
+  Widget _buildRoster(BuildContext context, List<PlayerModel> lineup) {
+    final team1Id = match.team1Id;
+    final team2Id = match.team2Id;
+
+    // Source of truth for the *matchday* squad (11 starters + named bench)
+    // is `match_lineups` — written by `poll_lineups` ~45 min before kickoff
+    // for the upcoming fixture. Before that arrives we render the full
+    // season roster from `team.players` so the user always sees the
+    // available pool of players (rather than an empty placeholder).
+    List<PlayerModel> t1List =
+        lineup.where((p) => p.teamId == team1Id).toList();
+    List<PlayerModel> t2List =
+        lineup.where((p) => p.teamId == team2Id).toList();
+    final usingMatchLineup = t1List.isNotEmpty || t2List.isNotEmpty;
+    if (!usingMatchLineup) {
+      t1List = [...(match.team1?.players ?? <PlayerModel>[])];
+      t2List = [...(match.team2?.players ?? <PlayerModel>[])];
+    }
+
+    t1List.sort(_playerSort);
+    t2List.sort(_playerSort);
+
+    // Starter/sub split is only meaningful when the matchday lineup
+    // confirmed which 11 start; otherwise treat the whole list as one
+    // roster (no section labels, no formation tag).
+    final t1Starters = usingMatchLineup
+        ? t1List.where((p) => p.isStarter).toList()
+        : const <PlayerModel>[];
+    final t1Subs = usingMatchLineup
+        ? t1List.where((p) => !p.isStarter).toList()
+        : const <PlayerModel>[];
+    final t2Starters = usingMatchLineup
+        ? t2List.where((p) => p.isStarter).toList()
+        : const <PlayerModel>[];
+    final t2Subs = usingMatchLineup
+        ? t2List.where((p) => !p.isStarter).toList()
+        : const <PlayerModel>[];
+
+    final t1ShowSplit = usingMatchLineup && t1Starters.isNotEmpty;
+    final t2ShowSplit = usingMatchLineup && t2Starters.isNotEmpty;
+    final t1RenderStarters = t1ShowSplit ? t1Starters : t1List;
+    final t1RenderSubs = t1ShowSplit ? t1Subs : const <PlayerModel>[];
+    final t2RenderStarters = t2ShowSplit ? t2Starters : t2List;
+    final t2RenderSubs = t2ShowSplit ? t2Subs : const <PlayerModel>[];
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
-      child: IntrinsicHeight(
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // ── Team 1 ──────────────────────────────────────────────────────
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  if (match.team1 != null) _TeamHeader(team: match.team1!),
-                  const SizedBox(height: 4),
-                  for (final p in t1Players)
-                    _PlayerRow(player: p, rightAlign: false),
-                ],
-              ),
-            ),
-            const SizedBox(width: 12),
-            // ── Team 2 ──────────────────────────────────────────────────────
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  if (match.team2 != null)
-                    _TeamHeader(team: match.team2!, rightAlign: true),
-                  const SizedBox(height: 4),
-                  for (final p in t2Players)
-                    _PlayerRow(player: p, rightAlign: true),
-                ],
-              ),
-            ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (!usingMatchLineup) ...[
+            _LineupsPendingBanner(kickoff: match.kickoffTime),
+            const SizedBox(height: 12),
           ],
+          IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // ── Team 1 ──────────────────────────────────────────────────────
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (match.team1 != null) _TeamHeader(team: match.team1!),
+                      if (t1ShowSplit)
+                        _RosterSectionLabel(
+                          label: 'Starting XI',
+                          formation: match.formationTeam1,
+                          rightAlign: false,
+                        ),
+                      for (final p in t1RenderStarters)
+                        _PlayerRow(player: p, rightAlign: false),
+                      if (t1RenderSubs.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        const _RosterSectionLabel(
+                          label: 'Substitutes',
+                          rightAlign: false,
+                        ),
+                        for (final p in t1RenderSubs)
+                          _PlayerRow(player: p, rightAlign: false),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 12),
+                // ── Team 2 ──────────────────────────────────────────────────────
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      if (match.team2 != null)
+                        _TeamHeader(team: match.team2!, rightAlign: true),
+                      if (t2ShowSplit)
+                        _RosterSectionLabel(
+                          label: 'Starting XI',
+                          formation: match.formationTeam2,
+                          rightAlign: true,
+                        ),
+                      for (final p in t2RenderStarters)
+                        _PlayerRow(player: p, rightAlign: true),
+                      if (t2RenderSubs.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        const _RosterSectionLabel(
+                          label: 'Substitutes',
+                          rightAlign: true,
+                        ),
+                        for (final p in t2RenderSubs)
+                          _PlayerRow(player: p, rightAlign: true),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Vertically-fixed empty/error state used by both TEAMS and OTHERS tabs.
+///
+/// Both tabs anchor their empty content at the same offset from the top
+/// of the tab body (96px), so switching tabs doesn't shift the icon up
+/// or down between them. A `Center` widget would re-anchor to the
+/// midpoint of available height, which differs between tabs once the
+/// hero card pushes the body down by a different amount.
+class _TabEmptyState extends StatelessWidget {
+  const _TabEmptyState({
+    required this.icon,
+    required this.primaryText,
+    this.secondaryText,
+  });
+
+  final IconData icon;
+  final String primaryText;
+  final String? secondaryText;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(32, 96, 32, 24),
+      children: [
+        Icon(icon, size: 40, color: AppColors.onSurfaceMuted),
+        const SizedBox(height: 12),
+        Text(
+          primaryText,
+          textAlign: TextAlign.center,
+          style: theme.textTheme.bodyMedium
+              ?.copyWith(color: AppColors.onSurfaceMuted),
         ),
+        if (secondaryText != null) ...[
+          const SizedBox(height: 8),
+          Text(
+            secondaryText!,
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodySmall
+                ?.copyWith(color: AppColors.onSurfaceMuted),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// Compact info banner shown above the Teams tab roster while the
+/// matchday lineup is still pending (no `match_lineups` rows yet).
+/// Tells the user that the list below is the season-long squad, not
+/// the eventual starting XI, and surfaces the countdown to the
+/// poll_lineups window so they know when to expect the real lineup.
+class _LineupsPendingBanner extends StatelessWidget {
+  const _LineupsPendingBanner({required this.kickoff});
+
+  final DateTime? kickoff;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final hasFutureKickoff =
+        kickoff != null && kickoff!.isAfter(DateTime.now());
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceHigh,
+        borderRadius: BorderRadius.circular(AppRadii.card),
+        border: Border.all(color: AppColors.outline, width: 1),
+      ),
+      child: Row(
+        children: [
+          const Icon(Symbols.schedule, size: 18,
+              color: AppColors.onSurfaceMuted),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Lineups available about 45 minutes before kickoff.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: AppColors.onSurfaceMuted,
+              ),
+            ),
+          ),
+          if (hasFutureKickoff) ...[
+            const SizedBox(width: 8),
+            CountdownPill(target: kickoff!),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Compact section header used inside the Teams tab to separate the
+/// starting XI from substitutes. Mirrors the team-side alignment so the
+/// label sits on the same edge as the team header above.
+class _RosterSectionLabel extends StatelessWidget {
+  const _RosterSectionLabel({
+    required this.label,
+    required this.rightAlign,
+    this.formation,
+  });
+  final String label;
+  final bool rightAlign;
+  final String? formation;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final text = formation != null && formation!.isNotEmpty
+        ? '$label · $formation'
+        : label;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(0, 8, 0, 4),
+      child: Row(
+        mainAxisAlignment:
+            rightAlign ? MainAxisAlignment.end : MainAxisAlignment.start,
+        children: [
+          Text(
+            text,
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: AppColors.onSurfaceMuted,
+              fontWeight: FontWeight.w600,
+              letterSpacing: 0.3,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1403,6 +1636,462 @@ class _TeamHeader extends StatelessWidget {
         children: rightAlign
             ? [name, const SizedBox(width: 8), flag]
             : [flag, const SizedBox(width: 8), name],
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Others Tab — every group-mate's predicted points for THIS match
+// ---------------------------------------------------------------------------
+
+class _OthersTab extends ConsumerWidget {
+  const _OthersTab({required this.match, required this.matchId});
+  final MatchModel match;
+  final int matchId;
+
+  String _headerCopy() {
+    if (match.status == 'final') return 'Final results';
+    if (match.status == 'live') {
+      return 'Live potential — updates as the match progresses';
+    }
+    return 'Predictions visible after kickoff';
+  }
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final rowsAsync = ref.watch(othersForMatchProvider(matchId));
+    final picksRevealed = match.status == 'final';
+
+    Future<void> refresh() async {
+      // Refresh the whole chain: profile set, predictions, boosters, events.
+      // matchByIdProvider is invalidated too in case status flipped between
+      // navigations — `othersForMatchProvider` depends on it.
+      ref.invalidate(myGroupmatesProvider);
+      ref.invalidate(matchPredictionsByUserProvider(matchId));
+      ref.invalidate(matchBoostersByUserProvider(matchId));
+      ref.invalidate(matchByIdProvider(matchId));
+      // Wait for the family's next emission so the spinner stays up
+      // until fresh data lands, not just until the invalidate returns.
+      await ref.read(othersForMatchProvider(matchId).future);
+    }
+
+    Widget wrapWithRefresh(Widget child) => RefreshIndicator(
+          onRefresh: refresh,
+          color: AppColors.primary,
+          backgroundColor: AppColors.surfaceHigh,
+          child: child,
+        );
+
+    return rowsAsync.when(
+      loading: () => const Center(
+        child: CircularProgressIndicator(color: AppColors.primary),
+      ),
+      error: (e, _) => wrapWithRefresh(
+        ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(24, 64, 24, 24),
+          children: [
+            Text(
+              'Could not load group-mates.\nPull to retry.\n\n$e',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.bodyMedium
+                  ?.copyWith(color: AppColors.onSurfaceMuted),
+            ),
+          ],
+        ),
+      ),
+      data: (rows) {
+        if (rows.isEmpty) {
+          return wrapWithRefresh(
+            _TabEmptyState(
+              icon: Symbols.group,
+              primaryText: match.status == 'scheduled'
+                  ? 'No predictions from your group-mates yet.\nPull to refresh.'
+                  : 'None of your group-mates predicted this match.',
+            ),
+          );
+        }
+
+        return wrapWithRefresh(
+          ListView.builder(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 24),
+            itemCount: rows.length + 1,
+            itemBuilder: (context, index) {
+              if (index == 0) {
+                return Padding(
+                  padding: const EdgeInsets.fromLTRB(4, 4, 4, 12),
+                  child: Text(
+                    _headerCopy(),
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: AppColors.onSurfaceMuted,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.3,
+                    ),
+                  ),
+                );
+              }
+              final row = rows[index - 1];
+              return _OthersRowTile(
+                row: row,
+                match: match,
+                picksRevealed: picksRevealed,
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _OthersRowTile extends StatelessWidget {
+  const _OthersRowTile({
+    required this.row,
+    required this.match,
+    required this.picksRevealed,
+  });
+
+  final OthersRow row;
+  final MatchModel match;
+  final bool picksRevealed;
+
+  /// Tier-color matches the `_PointsBadge` rule in `user_predictions_screen.dart`
+  /// so the OTHERS leaderboard reads like the per-user predictions list.
+  Color _pointColor(int? earned, {required bool isFinal}) {
+    if (!isFinal) return AppColors.onSurfaceMuted;
+    if (earned == null) return AppColors.onSurfaceMuted;
+    if (earned >= 8) return AppColors.gold;
+    if (earned >= 5) return AppColors.primary;
+    if (earned >= 1) return AppColors.secondary;
+    return AppColors.onSurfaceMuted;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isFinal = match.status == 'final';
+    final isLive = match.status == 'live';
+    final theme = Theme.of(context);
+    final name = row.profile.displayName?.trim();
+    final label = (name == null || name.isEmpty) ? '—' : name;
+    final initial = label.substring(0, 1).toUpperCase();
+
+    final score = row.score;
+    final total = (score != null && (isFinal || isLive)) ? score.total : null;
+    final pointColor = _pointColor(total, isFinal: isFinal);
+    final prediction = row.prediction;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppColors.surfaceHigh,
+          borderRadius: AppRadii.cardRadius,
+        ),
+        child: Padding(
+          padding:
+                const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // ── Header: avatar + name | points badge ────────────────
+                Row(
+                  children: [
+                    _OthersAvatar(initial: initial),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        label,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          color: AppColors.onSurface,
+                          fontWeight: FontWeight.w700,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    _OthersPointsBadge(total: total, color: pointColor),
+                  ],
+                ),
+                // ── Predicted / Actual scores — only after FT ─────────────
+                // During `live`, we deliberately render JUST the points pill
+                // above so opponents can compete on potential points without
+                // anyone seeing each other's actual picks until the final
+                // whistle.
+                if (isFinal && prediction != null) ...[
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      _OthersScoreBlock(
+                        label: 'Predicted',
+                        score1: prediction.predictedTeam1,
+                        score2: prediction.predictedTeam2,
+                        highlight: false,
+                      ),
+                      const SizedBox(width: 20),
+                      _OthersScoreBlock(
+                        label: 'Actual',
+                        score1: match.scoreFtTeam1,
+                        score2: match.scoreFtTeam2,
+                        highlight: true,
+                      ),
+                    ],
+                  ),
+                ],
+                // ── Per-category chips: prediction picks + verdict merged
+                if (isFinal && prediction != null && score != null) ...[
+                  const SizedBox(height: 10),
+                  _OthersChips(
+                    prediction: prediction,
+                    match: match,
+                    score: score,
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+    );
+  }
+}
+
+class _OthersAvatar extends StatelessWidget {
+  const _OthersAvatar({required this.initial});
+  final String initial;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 36,
+      height: 36,
+      decoration: BoxDecoration(
+        color: AppColors.surfaceHighest,
+        shape: BoxShape.circle,
+        border: Border.all(color: AppColors.outline, width: 1),
+      ),
+      alignment: Alignment.center,
+      child: Text(
+        initial,
+        style: const TextStyle(
+          color: AppColors.onSurface,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+}
+
+class _OthersPointsBadge extends StatelessWidget {
+  const _OthersPointsBadge({required this.total, required this.color});
+  final int? total;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Text(
+          total == null ? '—' : '$total',
+          style: textTheme.titleLarge?.copyWith(
+            color: color,
+            fontWeight: FontWeight.bold,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+        Text(
+          'pts',
+          style: textTheme.labelSmall
+              ?.copyWith(color: AppColors.onSurfaceMuted),
+        ),
+      ],
+    );
+  }
+}
+
+class _OthersScoreBlock extends StatelessWidget {
+  const _OthersScoreBlock({
+    required this.label,
+    required this.score1,
+    required this.score2,
+    required this.highlight,
+  });
+  final String label;
+  final int? score1;
+  final int? score2;
+  final bool highlight;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final scoreText = (score1 != null && score2 != null)
+        ? formatScore(score1, score2)
+        : '—';
+    final scoreColor =
+        highlight ? AppColors.onSurface : AppColors.onSurfaceVariant;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label,
+            style: textTheme.labelSmall
+                ?.copyWith(color: AppColors.onSurfaceMuted)),
+        const SizedBox(height: 2),
+        Text(
+          scoreText,
+          style: textTheme.titleMedium?.copyWith(
+            color: scoreColor,
+            fontWeight: highlight ? FontWeight.bold : FontWeight.normal,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// One unified chip row per OTHERS tile (post-FT).
+///
+/// Each chip carries both the prediction's **context** (which team /
+/// player the user picked) and the **verdict** (points awarded), green
+/// when the category hit, gray when it missed. Categories the user
+/// did not pick at all (e.g. no goalscorer) are omitted entirely.
+///
+/// Examples:
+/// - "Exact · 5pts" (match-result category — always shown)
+/// - "First team: United States · 2pts" (only when user picked a first team)
+/// - "Scorer: C. Pulisic · 8pts" (only when user picked a goalscorer)
+/// - "×3 booster" (only on boosted knockout matches)
+class _OthersChips extends StatelessWidget {
+  const _OthersChips({
+    required this.prediction,
+    required this.match,
+    required this.score,
+  });
+  final PredictionModel prediction;
+  final MatchModel match;
+  final LiveScore score;
+
+  @override
+  Widget build(BuildContext context) {
+    // Mutually-exclusive match-result label.
+    final String matchLabel;
+    switch (score.pointsMatch) {
+      case 5:
+        matchLabel = 'Exact';
+      case 3:
+        matchLabel = 'Goal diff';
+      case 2:
+        matchLabel = 'Outcome';
+      default:
+        matchLabel = 'Miss';
+    }
+
+    final chips = <Widget>[
+      _OthersChip(
+        icon: score.pointsMatch > 0
+            ? Icons.check_circle_outline
+            : Icons.remove_circle_outline,
+        label: '$matchLabel · ${score.pointsMatch}pts',
+        hit: score.pointsMatch > 0,
+      ),
+    ];
+
+    final ft = prediction.predictedFirstTeamId;
+    if (ft != null) {
+      chips.add(_OthersChip(
+        icon: score.pointsFirstTeam > 0
+            ? Icons.check_circle_outline
+            : Icons.remove_circle_outline,
+        label:
+            'First team: ${_resolveTeamName(match, ft)} · ${score.pointsFirstTeam}pts',
+        hit: score.pointsFirstTeam > 0,
+      ));
+    }
+
+    final sc = prediction.predictedScorerId;
+    if (sc != null) {
+      final scorer = abbreviateFullName(_resolveScorerName(match, sc));
+      if (scorer.isNotEmpty) {
+        chips.add(_OthersChip(
+          icon: score.pointsGoalscorer > 0
+              ? Icons.check_circle_outline
+              : Icons.remove_circle_outline,
+          label: 'Scorer: $scorer · ${score.pointsGoalscorer}pts',
+          hit: score.pointsGoalscorer > 0,
+        ));
+      }
+    }
+
+    if (score.multiplier > 1) {
+      chips.add(_OthersChip(
+        icon: Icons.bolt_outlined,
+        label: '×${score.multiplier} booster',
+        hit: true,
+      ));
+    }
+
+    return Wrap(spacing: 6, runSpacing: 6, children: chips);
+  }
+}
+
+class _OthersChip extends StatelessWidget {
+  const _OthersChip({
+    required this.icon,
+    required this.label,
+    required this.hit,
+  });
+  final IconData icon;
+  final String label;
+  final bool hit;
+
+  @override
+  Widget build(BuildContext context) {
+    final color = hit ? AppColors.primary : AppColors.onSurfaceMuted;
+    final bgColor = hit
+        ? AppColors.primaryContainer.withValues(alpha: 0.5)
+        : AppColors.surfaceHighest;
+    // Cap chip width so an unusually long combined label
+    // ("First team: <country> · Xpts") wraps to the next Wrap row
+    // rather than blowing past the tile edge. The Flexible + ellipsis
+    // pair inside is the final safety net for the unlikely case where
+    // even the abbreviated name still overflows the cap.
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 280),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        decoration: BoxDecoration(
+          color: bgColor,
+          borderRadius: AppRadii.pillRadius,
+          border: Border.all(
+            color: hit
+                ? AppColors.primary.withValues(alpha: 0.4)
+                : AppColors.outline,
+            width: 1,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 13, color: color),
+            const SizedBox(width: 4),
+            Flexible(
+              child: Text(
+                label,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                softWrap: false,
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: color,
+                      fontWeight: hit ? FontWeight.w600 : FontWeight.normal,
+                    ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1586,19 +2275,17 @@ class _PlayerChip extends StatelessWidget {
               (numberStr == null ? 0 : gapNameNumber + numberWidth);
           final availableForName = c.maxWidth - reserved;
 
-          // If the full name doesn't fit, drop the first name to an initial.
-          // Falls back to a plain ellipsis when even the abbreviation overflows.
+          // If the full name doesn't fit, drop the first name to an
+          // initial via the shared `abbreviateFullName` helper. The
+          // width check guards against unnecessary abbreviation on a
+          // wide chip; threshold:0 forces abbreviation here (we've
+          // already decided the name overflows). Falls back to plain
+          // ellipsis when even the abbreviation overflows.
           final fullName = player.name;
           final fullWidth = _measureTextWidth(fullName, nameStyle);
-          String displayName = fullName;
-          if (fullWidth > availableForName) {
-            final tokens = fullName.split(RegExp(r'\s+'));
-            if (tokens.length >= 2 &&
-                tokens.first.length > 1 &&
-                !tokens.first.endsWith('.')) {
-              displayName = '${tokens.first[0]}. ${tokens.skip(1).join(' ')}';
-            }
-          }
+          final displayName = fullWidth > availableForName
+              ? abbreviateFullName(fullName, threshold: 0)
+              : fullName;
 
           final badge = _PositionBadge(position: player.position);
           final nameWidget = Flexible(

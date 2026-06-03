@@ -11,6 +11,7 @@ import 'package:wcpredict/core/models/prediction_model.dart';
 import 'package:wcpredict/core/theme/app_colors.dart';
 import 'package:wcpredict/core/theme/app_radii.dart';
 import 'package:wcpredict/shared/providers/groups_provider.dart';
+import 'package:wcpredict/shared/providers/auth_provider.dart';
 import 'package:wcpredict/shared/widgets/team_flag.dart';
 import 'package:wcpredict/shared/utils/score_format.dart';
 
@@ -41,6 +42,10 @@ class UserPredictionsScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final predsAsync = ref.watch(userPredictionsProvider(userId));
+    // Mask other users' picks until each match goes final. Owner sees own
+    // picks unconditionally — they're the ones who entered them.
+    final viewerId = ref.watch(currentUserIdProvider);
+    final maskPicks = viewerId != userId;
 
     return Scaffold(
       backgroundColor: AppColors.surfaceBase,
@@ -124,6 +129,7 @@ class UserPredictionsScreen extends ConsumerWidget {
                     (ctx, i) => _PredictionTile(
                       prediction: completed[i].prediction,
                       match: completed[i].match,
+                      maskPicks: maskPicks,
                     ),
                     childCount: completed.length,
                   ),
@@ -136,6 +142,7 @@ class UserPredictionsScreen extends ConsumerWidget {
                     (ctx, i) => _PredictionTile(
                       prediction: upcoming[i].prediction,
                       match: upcoming[i].match,
+                      maskPicks: maskPicks,
                     ),
                     childCount: upcoming.length,
                   ),
@@ -313,14 +320,26 @@ class _SectionHeader extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _PredictionTile extends StatelessWidget {
-  const _PredictionTile({required this.prediction, required this.match});
+  const _PredictionTile({
+    required this.prediction,
+    required this.match,
+    this.maskPicks = false,
+  });
   final PredictionModel prediction;
   final MatchModel match;
+
+  /// When `true`, hides predicted score + bonus picks for non-final matches.
+  /// Set by the parent screen when the viewer is NOT the prediction owner —
+  /// preserves the rule that opponents only learn each other's picks once
+  /// the final whistle blows.
+  final bool maskPicks;
 
   @override
   Widget build(BuildContext context) {
     final isFinal = match.status == 'final';
     final isLive = match.status == 'live';
+    // Picks remain hidden when masked AND match hasn't completed yet.
+    final hidePicks = maskPicks && !isFinal;
 
     final earned = prediction.pointsEarned;
     final pointColor = isFinal
@@ -360,42 +379,74 @@ class _PredictionTile extends StatelessWidget {
                   ],
                 ],
               ),
-              const SizedBox(height: 10),
-              // ── Scores row ────────────────────────────────────────────
-              Row(
-                children: [
-                  _ScoreBlock(
-                    label: 'Predicted',
-                    score1: prediction.predictedTeam1,
-                    score2: prediction.predictedTeam2,
-                    highlight: false,
-                  ),
-                  if (isFinal) ...[
-                    const SizedBox(width: 20),
+              if (hidePicks) ...[
+                const SizedBox(height: 10),
+                _HiddenPicksRow(isLive: isLive),
+              ] else ...[
+                const SizedBox(height: 10),
+                // ── Scores row ────────────────────────────────────────────
+                Row(
+                  children: [
                     _ScoreBlock(
-                      label: 'Actual',
-                      score1: match.scoreFtTeam1,
-                      score2: match.scoreFtTeam2,
-                      highlight: true,
+                      label: 'Predicted',
+                      score1: prediction.predictedTeam1,
+                      score2: prediction.predictedTeam2,
+                      highlight: false,
                     ),
+                    if (isFinal) ...[
+                      const SizedBox(width: 20),
+                      _ScoreBlock(
+                        label: 'Actual',
+                        score1: match.scoreFtTeam1,
+                        score2: match.scoreFtTeam2,
+                        highlight: true,
+                      ),
+                    ],
                   ],
+                ),
+                // ── Bonus picks (first-team & goalscorer) ─────────────────
+                if (prediction.predictedFirstTeamId != null ||
+                    prediction.predictedScorerId != null) ...[
+                  const SizedBox(height: 10),
+                  _BonusPicksRow(prediction: prediction, match: match),
                 ],
-              ),
-              // ── Bonus picks (first-team & goalscorer) ─────────────────
-              if (prediction.predictedFirstTeamId != null ||
-                  prediction.predictedScorerId != null) ...[
-                const SizedBox(height: 10),
-                _BonusPicksRow(prediction: prediction, match: match),
-              ],
-              // ── Points breakdown ──────────────────────────────────────
-              if (isFinal) ...[
-                const SizedBox(height: 10),
-                _PointsBreakdown(prediction: prediction),
+                // ── Points breakdown ──────────────────────────────────────
+                if (isFinal) ...[
+                  const SizedBox(height: 10),
+                  _PointsBreakdown(prediction: prediction),
+                ],
               ],
             ],
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Placeholder rendered when the viewer is not the prediction owner and
+/// the match hasn't gone final yet. Keeps the secrecy rule consistent
+/// across the OTHERS tab and per-user predictions screen.
+class _HiddenPicksRow extends StatelessWidget {
+  const _HiddenPicksRow({required this.isLive});
+  final bool isLive;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        const Icon(Icons.lock_outline,
+            size: 14, color: AppColors.onSurfaceMuted),
+        const SizedBox(width: 6),
+        Text(
+          isLive
+              ? 'Pick hidden until full-time'
+              : 'Pick hidden until kickoff',
+          style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                color: AppColors.onSurfaceMuted,
+              ),
+        ),
+      ],
     );
   }
 }

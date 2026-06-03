@@ -15,6 +15,14 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Apply the Google services plugin only when the config file is present.
+// Lets builds work for contributors who haven't completed the FCM setup
+// from the plan's Blocker A; once `android/app/google-services.json` is
+// committed the plugin auto-engages.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+}
+
 android {
     namespace = "com.dlovric.wcpredict2026"
     compileSdk = flutter.compileSdkVersion

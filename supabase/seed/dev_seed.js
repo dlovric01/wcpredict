@@ -1,10 +1,26 @@
 /**
- * WC2026 Predict — Dev Seed (v2)
+ * WC2026 Predict — Dev Seed (v3)
  *
- * All 16 finalized match predictions are hand-crafted with:
- * - Human-looking score guesses (not modular arithmetic)
- * - predicted_scorer_id set to real players where goal events exist
- * - predicted_scorer_id set to real players where goal events exist
+ * Hand-crafted prediction matrix (all 16 Matchday 1 games) plus auxiliary
+ * fixtures that exercise the post-MVP features:
+ *
+ *   • device_tokens          — one fake FCM token per dev user (platform
+ *                              alternates ios/android). Lets `notify_predict_reminders`
+ *                              anti-join logic be exercised locally without
+ *                              standing up real devices. Tokens are
+ *                              deliberately invalid (FCM 404s) so no real
+ *                              push fires.
+ *   • formations             — two finalised matches get `formation_team1`
+ *                              and `formation_team2` populated so the Teams
+ *                              tab renders a roster; the rest keep NULL so
+ *                              the "lineups available 45 min before
+ *                              kickoff" placeholder is also exercisable.
+ *   • prediction_reminders   — one synthetic log row for a finalised match
+ *                              demonstrates the schema and lets the
+ *                              reminder UI smoke-test idempotency.
+ *   • Multi-user same-match  — Matchday-2 + 3 predictions cover every dev
+ *                              user, so the OTHERS tab has rows on first
+ *                              boot for any upcoming match.
  *
  * Expected standings (verified against compute_match_scoring logic):
  *   Alice   120 pts  — careful analyst, nails exact scores
@@ -359,6 +375,26 @@ async function main() {
   ]);
   console.log("  Members added");
 
+  // ── 3.5 Device tokens (one fake FCM token per user) ────────────────────────
+  // Deterministic strings, deliberately invalid — they exercise the
+  // notify_predict_reminders anti-join logic without delivering real pushes.
+  console.log("\nStep 3.5: Registering dev device tokens...");
+  for (const uid of Object.values(users)) {
+    await del(`/rest/v1/device_tokens?user_id=eq.${uid}`);
+  }
+  await sleep(200);
+  const tokenRows = Object.entries(users).map(([name, uid], i) => ({
+    user_id: uid,
+    token: `dev-fcm-token-${name}-${i % 2 === 0 ? "ios" : "android"}`,
+    platform: i % 2 === 0 ? "ios" : "android",
+  }));
+  const tokRes = await post("/rest/v1/device_tokens", tokenRows);
+  if (tokRes.status !== 201) {
+    console.error("  device_tokens insert failed:", tokRes.status, tokRes.body);
+  } else {
+    console.log(`  Registered ${tokenRows.length} fake device tokens`);
+  }
+
   // ── 4. Wipe existing dev predictions ──────────────────────────────────────
   console.log("\nStep 4: Clearing old predictions...");
   for (const uid of Object.values(users)) {
@@ -450,6 +486,63 @@ async function main() {
     await sleep(1200); // let trigger + mat view refresh settle
   }
 
+  // ── 7.5 Populate formations + per-match lineups on two finalised matches ──
+  // Lets the Teams tab render a real lineup roster out-of-the-box on those
+  // two matches; every other match keeps NULL formations so the
+  // "Lineups available about 45 minutes before kickoff" placeholder is
+  // also exercisable. The first two FINAL_MATCHES are convenient picks.
+  //
+  // Writes:
+  //   • matches.formation_team1 / formation_team2 (string label, e.g. "4-3-3")
+  //   • match_lineups rows: first 11 players by id ascending = starters,
+  //     next 7 = substitutes (so the Teams tab shows 11 + 7 = 18, matching
+  //     a typical matchday squad — never the entire 25-35 reserve roster).
+  console.log("\nStep 7.5: Populating formations + match_lineups on sample matches...");
+  const FORMATION_PRESETS = [
+    { id: FINAL_MATCHES[0].id, f1: "4-3-3",   f2: "4-2-3-1" },
+    { id: FINAL_MATCHES[1].id, f1: "3-5-2",   f2: "4-4-2"   },
+  ];
+  const STARTERS_PER_TEAM = 11;
+  const SUBS_PER_TEAM = 7;
+  for (const preset of FORMATION_PRESETS) {
+    await patch(`/rest/v1/matches?id=eq.${preset.id}`, {
+      formation_team1: preset.f1,
+      formation_team2: preset.f2,
+    });
+
+    const match = FINAL_MATCHES.find((m) => m.id === preset.id);
+    if (!match) continue;
+
+    // Replace any prior match_lineups rows for this fixture so re-runs
+    // are idempotent (delete-then-insert mirrors poll_lineups exactly).
+    await del(`/rest/v1/match_lineups?match_id=eq.${preset.id}`);
+
+    const lineupRows = [];
+    for (const teamId of [match.t1, match.t2]) {
+      const { body: roster } = await req(
+        "GET",
+        `/rest/v1/players?team_id=eq.${teamId}&select=id&order=id.asc&limit=${STARTERS_PER_TEAM + SUBS_PER_TEAM}`,
+      );
+      const ids = (roster || []).map((r) => r.id);
+      for (let i = 0; i < ids.length; i++) {
+        lineupRows.push({
+          match_id: preset.id,
+          team_id: teamId,
+          player_id: ids[i],
+          is_starter: i < STARTERS_PER_TEAM,
+          grid: i < STARTERS_PER_TEAM ? "1:1" : null,
+        });
+      }
+    }
+    if (lineupRows.length > 0) {
+      const r = await post("/rest/v1/match_lineups", lineupRows);
+      if (r.status !== 201) {
+        console.error(`  match_lineups insert failed for ${preset.id}:`, r.status, r.body);
+      }
+    }
+  }
+  console.log(`  Set formations + lineups on ${FORMATION_PRESETS.length} matches`);
+
   // ── 8. Lock predictions for finalized matches ──────────────────────────────
   console.log("\nStep 8: Locking predictions for finalized matches...");
   const finalIds = FINAL_MATCHES.map((m) => m.id);
@@ -472,6 +565,21 @@ async function main() {
   (s || []).forEach((r, i) =>
     console.log(`   ${i + 1}. ${r.display_name} — ${r.total_points} pts`)
   );
+
+  // ── 9. Seed one reminder log entry ─────────────────────────────────────────
+  // Demonstrates the prediction_reminders_sent schema. Uses Danijel + the
+  // first finalised match so the FK cascade trail (auth.users → match → log)
+  // is obvious during local debugging.
+  console.log("\nStep 9.5: Inserting sample reminder log row...");
+  await del(
+    `/rest/v1/prediction_reminders_sent?user_id=eq.${users.danijel}` +
+      `&match_id=eq.${FINAL_MATCHES[0].id}`,
+  );
+  await post("/rest/v1/prediction_reminders_sent", [{
+    user_id: users.danijel,
+    match_id: FINAL_MATCHES[0].id,
+  }]);
+  console.log(`  Inserted reminder log: (danijel, ${FINAL_MATCHES[0].id})`);
 
   console.log("\n=== Seed complete ===");
   console.log(`  Login: danijel/alice/bob/charlie @${DEV_DOMAIN} / ${DEV_PASSWORD}`);
