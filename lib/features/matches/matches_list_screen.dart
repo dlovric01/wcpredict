@@ -16,6 +16,7 @@ import 'package:wcpredict/shared/widgets/team_flag.dart';
 import 'package:wcpredict/features/matches/tournament_achievement_banner.dart';
 import 'package:wcpredict/core/scoring_rules.dart';
 import 'package:wcpredict/shared/providers/boosters_provider.dart';
+import 'package:wcpredict/features/matches/booster_logic.dart';
 
 class MatchesListScreen extends ConsumerWidget {
   const MatchesListScreen({super.key});
@@ -809,44 +810,6 @@ String _finalScoreLabel(MatchModel m) {
 // booster card for them.
 // ---------------------------------------------------------------------------
 
-/// Returns the round the booster card should surface, or null when no
-/// round is actionable. Pure — exported only via this file's private
-/// scope, but kept top-level so unit tests can target it directly later.
-String? _activeBoosterRound(List<MatchModel> matches) {
-  const knockoutOrder = ['R32', 'R16', 'QF', 'SF'];
-  for (var i = 0; i < knockoutOrder.length; i++) {
-    final round = knockoutOrder[i];
-    final roundMatches = matches.where((m) => m.round == round).toList();
-    if (roundMatches.isEmpty) continue;
-
-    // Previous stage must have fully finalised so the bracket teams are
-    // real. R32's gate is the group stage; later rounds gate on the
-    // previous knockout round.
-    final prevRoundFinal = i == 0
-        ? _allGroupStageFinal(matches)
-        : matches
-            .where((m) => m.round == knockoutOrder[i - 1])
-            .every((m) => m.status == 'final');
-    if (!prevRoundFinal) continue;
-
-    // At least one match in THIS round must still be pre-kickoff.
-    final hasUnlocked = roundMatches.any((m) => !m.isLocked);
-    if (!hasUnlocked) continue;
-
-    return round;
-  }
-  return null;
-}
-
-bool _allGroupStageFinal(List<MatchModel> matches) {
-  final group = matches.where((m) {
-    final r = m.round ?? '';
-    return r.startsWith('Matchday') || r == 'Group Stage';
-  }).toList();
-  if (group.isEmpty) return false;
-  return group.every((m) => m.status == 'final');
-}
-
 class _RoundBoostersStrip extends StatelessWidget {
   const _RoundBoostersStrip({
     required this.matches,
@@ -858,7 +821,7 @@ class _RoundBoostersStrip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final round = _activeBoosterRound(matches);
+    final round = activeBoosterRound(matches);
     if (round == null) return const SizedBox.shrink();
 
     final multiplier = kBoosterMultipliers[round]!;

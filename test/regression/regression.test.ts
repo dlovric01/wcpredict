@@ -1617,6 +1617,611 @@ describe("Knockout Boosters", () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 6b. KNOCKOUT BOOSTER EDGE CASES
+// ─────────────────────────────────────────────────────────────────────────────
+// Exhaustive coverage of constraint / trigger / RLS paths that the UI
+// either filters out or doesn't expose, but that the REST surface still
+// allows (or rejects). Locks down both the happy paths AND two known
+// scoring-drift gaps (DELETE-after-final, MOVE-after-final).
+
+describe("Knockout Booster Edge Cases", () => {
+  // Synthetic match IDs scoped to this block. Cleaned up in afterAll.
+  // NB: `matches.kickoff_time` is NOT NULL in the schema, so a TBD-bracket
+  // booster (kickoff_time IS NULL) is unreachable in production — the
+  // `check_booster_lock` trigger's `v_kickoff_time IS NOT NULL` guard is
+  // defensive dead code. We don't try to exercise that branch.
+  const M = {
+    CANCELLED: 99_310, // QF, status='cancelled', future kickoff
+    LIVE_QF:   99_311, // QF, status='live',      future kickoff
+    CASCADE:   99_313, // QF, status='scheduled', future kickoff (deleted mid-test)
+    R32:       99_320, // R32, status='scheduled', future kickoff
+    R16:       99_321, // R16, status='scheduled', future kickoff
+    SF:        99_322, // SF,  status='scheduled', future kickoff
+  };
+
+  // Block-local group so the RLS group_read tests are self-contained
+  // (the shared module-level `groupId` is only populated when the
+  // Groups describe block actually runs — which it doesn't under
+  // `bun test -t "Booster Edge Cases"`).
+  let edgeGroupId: string;
+
+  const future = () =>
+    new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  beforeAll(async () => {
+    const f = future();
+    const { error: matchErr } = await admin.from("matches").upsert([
+      { id: M.CANCELLED, round: "QF",  group_letter: null, team1_id: T.TEAM_A, team2_id: T.TEAM_B, kickoff_time: f, status: "cancelled" },
+      { id: M.LIVE_QF,   round: "QF",  group_letter: null, team1_id: T.TEAM_A, team2_id: T.TEAM_B, kickoff_time: f, status: "live" },
+      { id: M.CASCADE,   round: "QF",  group_letter: null, team1_id: T.TEAM_A, team2_id: T.TEAM_B, kickoff_time: f, status: "scheduled" },
+      { id: M.R32,       round: "R32", group_letter: null, team1_id: T.TEAM_A, team2_id: T.TEAM_B, kickoff_time: f, status: "scheduled" },
+      { id: M.R16,       round: "R16", group_letter: null, team1_id: T.TEAM_A, team2_id: T.TEAM_B, kickoff_time: f, status: "scheduled" },
+      { id: M.SF,        round: "SF",  group_letter: null, team1_id: T.TEAM_A, team2_id: T.TEAM_B, kickoff_time: f, status: "scheduled" },
+    ]);
+    expect(matchErr).toBeNull();
+
+    // Local group with alice + bob as members so the group_read RLS
+    // policy can be exercised without depending on the Groups block.
+    const code = `TEST_EDGE_${Date.now()}`;
+    const { data: g, error: gErr } = await admin
+      .from("groups")
+      .insert({ name: `TEST_EdgeGroup_${Date.now()}`, owner_id: alice.userId, invite_code: code })
+      .select()
+      .single();
+    expect(gErr).toBeNull();
+    edgeGroupId = g!.id;
+    const { error: mErr } = await admin.from("group_members").insert([
+      { group_id: edgeGroupId, user_id: alice.userId },
+      { group_id: edgeGroupId, user_id: bob.userId },
+    ]);
+    expect(mErr).toBeNull();
+  });
+
+  // Wipe alice + bob boosters between tests so order-of-execution doesn't
+  // affect assertions. Match state is restored per-test where needed.
+  beforeEach(async () => {
+    await admin
+      .from("round_boosters")
+      .delete()
+      .in("user_id", [alice.userId, bob.userId]);
+  });
+
+  afterAll(async () => {
+    await admin
+      .from("round_boosters")
+      .delete()
+      .in("user_id", [alice.userId, bob.userId]);
+    await admin.from("predictions").delete().in("match_id", Object.values(M));
+    await admin.from("matches").delete().in("id", Object.values(M));
+    if (edgeGroupId) {
+      await admin.from("group_members").delete().eq("group_id", edgeGroupId);
+      await admin.from("groups").delete().eq("id", edgeGroupId);
+    }
+  });
+
+  // ── Round-value enum ───────────────────────────────────────────────
+  // valid_round CHECK constraint: round in ('R32','R16','QF','SF').
+  // Final and 3rd are auto-multiplier rounds; no manual booster row
+  // should ever exist for them.
+
+  test("round='Final' rejected (auto-multiplier round, not in enum)", async () => {
+    const { error } = await alice.client.from("round_boosters").insert({
+      user_id: alice.userId,
+      round: "Final",
+      match_id: T.MATCH_KO,
+      multiplier: 6,
+    });
+    expect(error).not.toBeNull();
+  });
+
+  test("round='3rd' rejected (auto-multiplier round, not in enum)", async () => {
+    const { error } = await alice.client.from("round_boosters").insert({
+      user_id: alice.userId,
+      round: "3rd",
+      match_id: T.MATCH_KO,
+      multiplier: 5,
+    });
+    expect(error).not.toBeNull();
+  });
+
+  test("round='Group Stage' rejected (not in enum)", async () => {
+    const { error } = await alice.client.from("round_boosters").insert({
+      user_id: alice.userId,
+      round: "Group Stage",
+      match_id: T.MATCH_SCORING,
+      multiplier: 2,
+    });
+    expect(error).not.toBeNull();
+  });
+
+  test("round='foo' rejected (not in enum)", async () => {
+    const { error } = await alice.client.from("round_boosters").insert({
+      user_id: alice.userId,
+      round: "foo",
+      match_id: T.MATCH_KO,
+      multiplier: 4,
+    });
+    expect(error).not.toBeNull();
+  });
+
+  // ── (round, multiplier) pairing matrix ─────────────────────────────
+  // valid_multiplier CHECK constraint hard-codes the per-round value.
+  // Every wrong pairing MUST be rejected; every right pairing MUST be
+  // accepted. Existing suite already exercises QF×4 happy path + QF×5
+  // rejection — these widen the matrix.
+
+  test("all four valid (round, multiplier) pairings accepted", async () => {
+    const rows = [
+      { round: "R32", match_id: M.R32, multiplier: 2 },
+      { round: "R16", match_id: M.R16, multiplier: 3 },
+      { round: "QF",  match_id: T.MATCH_KO, multiplier: 4 },
+      { round: "SF",  match_id: M.SF,  multiplier: 5 },
+    ].map((r) => ({ ...r, user_id: alice.userId }));
+    const { error } = await admin.from("round_boosters").insert(rows);
+    expect(error).toBeNull();
+
+    const { data } = await admin
+      .from("round_boosters")
+      .select("round, multiplier")
+      .eq("user_id", alice.userId);
+    expect(data).toHaveLength(4);
+  });
+
+  test("R32 rejects multipliers 3 / 4 / 5", async () => {
+    for (const m of [3, 4, 5]) {
+      const { error } = await alice.client.from("round_boosters").insert({
+        user_id: alice.userId, round: "R32", match_id: M.R32, multiplier: m,
+      });
+      expect(error).not.toBeNull();
+    }
+  });
+
+  test("R16 rejects multipliers 2 / 4 / 5", async () => {
+    for (const m of [2, 4, 5]) {
+      const { error } = await alice.client.from("round_boosters").insert({
+        user_id: alice.userId, round: "R16", match_id: M.R16, multiplier: m,
+      });
+      expect(error).not.toBeNull();
+    }
+  });
+
+  test("SF rejects multipliers 2 / 3 / 4", async () => {
+    for (const m of [2, 3, 4]) {
+      const { error } = await alice.client.from("round_boosters").insert({
+        user_id: alice.userId, round: "SF", match_id: M.SF, multiplier: m,
+      });
+      expect(error).not.toBeNull();
+    }
+  });
+
+  test("multiplier=0 and multiplier=-1 rejected (no round accepts them)", async () => {
+    for (const m of [0, -1, 999]) {
+      const { error } = await alice.client.from("round_boosters").insert({
+        user_id: alice.userId, round: "QF", match_id: T.MATCH_KO, multiplier: m,
+      });
+      expect(error).not.toBeNull();
+    }
+  });
+
+  // ── NOT NULL + FK ──────────────────────────────────────────────────
+
+  test("NULL match_id rejected (NOT NULL constraint)", async () => {
+    const { error } = await alice.client.from("round_boosters").insert({
+      user_id: alice.userId,
+      round: "QF",
+      match_id: null,
+      multiplier: 4,
+    });
+    expect(error).not.toBeNull();
+  });
+
+  test("non-existent match_id rejected (FK violation)", async () => {
+    const { error } = await alice.client.from("round_boosters").insert({
+      user_id: alice.userId,
+      round: "QF",
+      match_id: 9_999_999,
+      multiplier: 4,
+    });
+    expect(error).not.toBeNull();
+  });
+
+  // ── Lock trigger: status branches ──────────────────────────────────
+
+  test("booster on cancelled match rejected by lock trigger", async () => {
+    const { error } = await alice.client.from("round_boosters").insert({
+      user_id: alice.userId,
+      round: "QF",
+      match_id: M.CANCELLED,
+      multiplier: 4,
+    });
+    expect(error).not.toBeNull();
+    expect(error?.message).toMatch(/booster cannot be applied|locked/i);
+  });
+
+  test("booster on live match rejected by lock trigger", async () => {
+    const { error } = await alice.client.from("round_boosters").insert({
+      user_id: alice.userId,
+      round: "QF",
+      match_id: M.LIVE_QF,
+      multiplier: 4,
+    });
+    expect(error).not.toBeNull();
+    expect(error?.message).toMatch(/booster cannot be applied|locked/i);
+  });
+  // ── ON DELETE CASCADE ──────────────────────────────────────────────
+
+  test("deleting the match cascades to its booster rows", async () => {
+    await admin.from("round_boosters").insert({
+      user_id: alice.userId,
+      round: "QF",
+      match_id: M.CASCADE,
+      multiplier: 4,
+    });
+    const { data: before } = await admin
+      .from("round_boosters")
+      .select("match_id")
+      .eq("user_id", alice.userId)
+      .eq("match_id", M.CASCADE);
+    expect(before).toHaveLength(1);
+
+    await admin.from("matches").delete().eq("id", M.CASCADE);
+
+    const { data: after } = await admin
+      .from("round_boosters")
+      .select("match_id")
+      .eq("user_id", alice.userId)
+      .eq("match_id", M.CASCADE);
+    expect(after).toHaveLength(0);
+
+    // Restore the match for any later test in this block.
+    await admin.from("matches").insert({
+      id: M.CASCADE, round: "QF", group_letter: null,
+      team1_id: T.TEAM_A, team2_id: T.TEAM_B,
+      kickoff_time: future(), status: "scheduled",
+    });
+  });
+
+  // ── Cross-round: one booster per round ─────────────────────────────
+
+  test("user can hold concurrent boosters across all four rounds", async () => {
+    await admin.from("round_boosters").insert([
+      { user_id: alice.userId, round: "R32", match_id: M.R32, multiplier: 2 },
+      { user_id: alice.userId, round: "R16", match_id: M.R16, multiplier: 3 },
+      { user_id: alice.userId, round: "QF",  match_id: T.MATCH_KO, multiplier: 4 },
+      { user_id: alice.userId, round: "SF",  match_id: M.SF,  multiplier: 5 },
+    ]);
+    const { data } = await admin
+      .from("round_boosters")
+      .select("round")
+      .eq("user_id", alice.userId);
+    expect(data?.map((r) => r.round).sort()).toEqual(["QF","R16","R32","SF"]);
+  });
+
+  test("upserting same round twice keeps the row count at one", async () => {
+    // PK is (user_id, round) so an insert of (alice, R32) twice MUST
+    // fail outright unless onConflict is specified.
+    await admin.from("round_boosters").insert({
+      user_id: alice.userId, round: "R32", match_id: M.R32, multiplier: 2,
+    });
+    const { error } = await admin.from("round_boosters").insert({
+      user_id: alice.userId, round: "R32", match_id: M.R32, multiplier: 2,
+    });
+    expect(error).not.toBeNull(); // PK violation
+
+    // Upsert-with-conflict succeeds and leaves a single row.
+    const { error: e2 } = await admin
+      .from("round_boosters")
+      .upsert(
+        { user_id: alice.userId, round: "R32", match_id: M.R32, multiplier: 2 },
+        { onConflict: "user_id,round" },
+      );
+    expect(e2).toBeNull();
+
+    const { data } = await admin
+      .from("round_boosters")
+      .select("match_id")
+      .eq("user_id", alice.userId)
+      .eq("round", "R32");
+    expect(data).toHaveLength(1);
+  });
+
+  // ── RLS ────────────────────────────────────────────────────────────
+
+  test("anon client cannot INSERT booster (RLS denial)", async () => {
+    const anon = anonClient();
+    const { error } = await anon.from("round_boosters").insert({
+      user_id: alice.userId, round: "QF", match_id: T.MATCH_KO, multiplier: 4,
+    });
+    expect(error).not.toBeNull();
+  });
+
+  test("bob cannot INSERT booster with alice's user_id (RLS with_check)", async () => {
+    const { error } = await bob.client.from("round_boosters").insert({
+      user_id: alice.userId, round: "QF", match_id: T.MATCH_KO, multiplier: 4,
+    });
+    expect(error).not.toBeNull();
+  });
+
+  test("bob cannot UPDATE alice's booster row", async () => {
+    await admin.from("round_boosters").insert({
+      user_id: alice.userId, round: "QF", match_id: T.MATCH_KO, multiplier: 4,
+    });
+    const { error, data } = await bob.client
+      .from("round_boosters")
+      .update({ match_id: M.CASCADE })
+      .eq("user_id", alice.userId)
+      .eq("round", "QF")
+      .select();
+    // RLS denies the row to bob → UPDATE matches zero rows. No error,
+    // but the returned data MUST be empty AND the row MUST be untouched.
+    expect(error).toBeNull();
+    expect(data ?? []).toHaveLength(0);
+    const { data: stillThere } = await admin
+      .from("round_boosters")
+      .select("match_id")
+      .eq("user_id", alice.userId)
+      .eq("round", "QF")
+      .single();
+    expect(stillThere?.match_id).toBe(T.MATCH_KO);
+  });
+
+  test("bob cannot DELETE alice's booster row", async () => {
+    await admin.from("round_boosters").insert({
+      user_id: alice.userId, round: "QF", match_id: T.MATCH_KO, multiplier: 4,
+    });
+    await bob.client
+      .from("round_boosters")
+      .delete()
+      .eq("user_id", alice.userId)
+      .eq("round", "QF");
+    const { data } = await admin
+      .from("round_boosters")
+      .select("match_id")
+      .eq("user_id", alice.userId)
+      .eq("round", "QF");
+    expect(data).toHaveLength(1);
+  });
+
+  test("bob cannot SELECT alice's pre-kickoff booster (own-only policy)", async () => {
+    await admin.from("round_boosters").insert({
+      user_id: alice.userId, round: "QF", match_id: T.MATCH_KO, multiplier: 4,
+    });
+    const { data } = await bob.client
+      .from("round_boosters")
+      .select("match_id")
+      .eq("user_id", alice.userId)
+      .eq("round", "QF");
+    expect(data ?? []).toHaveLength(0);
+  });
+
+  test("bob CAN SELECT alice's post-kickoff booster (same group, group_read)", async () => {
+    // The Groups describe block has already added alice + bob to
+    // `groupId`. Once the match status flips out of 'scheduled', the
+    // group_read policy allows bob to see alice's row.
+    await admin.from("round_boosters").insert({
+      user_id: alice.userId, round: "QF", match_id: T.MATCH_KO, multiplier: 4,
+    });
+    // Flip MATCH_KO to live so the group_read predicate matches.
+    await admin
+      .from("matches")
+      .update({ status: "live" })
+      .eq("id", T.MATCH_KO);
+
+    const { data } = await bob.client
+      .from("round_boosters")
+      .select("match_id, multiplier")
+      .eq("user_id", alice.userId)
+      .eq("round", "QF");
+    expect(data).toHaveLength(1);
+    expect(data![0].multiplier).toBe(4);
+
+    // Restore status for downstream tests.
+    await admin
+      .from("matches")
+      .update({ status: "scheduled" })
+      .eq("id", T.MATCH_KO);
+  });
+
+  test("charlie (NOT in group) cannot SELECT alice's post-kickoff booster", async () => {
+    await admin.from("round_boosters").insert({
+      user_id: alice.userId, round: "QF", match_id: T.MATCH_KO, multiplier: 4,
+    });
+    await admin.from("matches").update({ status: "live" }).eq("id", T.MATCH_KO);
+
+    const { data } = await charlie.client
+      .from("round_boosters")
+      .select("match_id")
+      .eq("user_id", alice.userId)
+      .eq("round", "QF");
+    expect(data ?? []).toHaveLength(0);
+
+    await admin.from("matches").update({ status: "scheduled" }).eq("id", T.MATCH_KO);
+  });
+
+  // ── Scoring side-effects ───────────────────────────────────────────
+
+  test("booster with no prediction has no scoring effect (no row created)", async () => {
+    await admin.from("predictions").delete().eq("match_id", T.MATCH_KO);
+    await admin.from("match_events").delete().eq("match_id", T.MATCH_KO);
+    await admin
+      .from("matches")
+      .update({ status: "scheduled", score_ft_team1: null, score_ft_team2: null })
+      .eq("id", T.MATCH_KO);
+
+    await admin.from("round_boosters").insert({
+      user_id: alice.userId, round: "QF", match_id: T.MATCH_KO, multiplier: 4,
+    });
+    // No prediction inserted for alice.
+    await admin
+      .from("matches")
+      .update({ status: "final", score_ft_team1: 2, score_ft_team2: 1 })
+      .eq("id", T.MATCH_KO);
+    await sleep(2000);
+
+    const { data } = await admin
+      .from("predictions")
+      .select("user_id")
+      .eq("match_id", T.MATCH_KO);
+    // compute_match_scoring updates existing rows; it MUST NOT
+    // spontaneously create one just because a booster exists.
+    expect((data ?? []).length).toBe(0);
+
+    // Cleanup
+    await admin
+      .from("matches")
+      .update({ status: "scheduled", score_ft_team1: null, score_ft_team2: null })
+      .eq("id", T.MATCH_KO);
+  });
+
+  // ── Scoring DRIFT gaps ─────────────────────────────────────────────
+  // These document KNOWN gaps in the trigger surface. The trigger
+  // `check_booster_lock` only fires on INSERT/UPDATE, never DELETE; and
+  // moving the booster between matches (upsert with new match_id) does
+  // not re-run `compute_match_scoring` on the OLD match. If the old
+  // match has already finalised, its `multiplier` column is now stale.
+  //
+  // Until a DELETE trigger + cross-match recompute lands, these tests
+  // pin the current (buggy) behavior so that fixing it produces a
+  // test failure here as a forcing function.
+
+  test("GAP: DELETE booster after final leaves multiplier stuck on prediction", async () => {
+    await admin.from("predictions").delete().eq("match_id", T.MATCH_KO);
+    await admin.from("match_events").delete().eq("match_id", T.MATCH_KO);
+    await admin
+      .from("matches")
+      .update({ status: "scheduled", score_ft_team1: null, score_ft_team2: null })
+      .eq("id", T.MATCH_KO);
+
+    await admin.from("round_boosters").insert({
+      user_id: alice.userId, round: "QF", match_id: T.MATCH_KO, multiplier: 4,
+    });
+    await admin.from("predictions").insert({
+      user_id: alice.userId, match_id: T.MATCH_KO,
+      predicted_team1: 2, predicted_team2: 1,
+    });
+    await admin
+      .from("matches")
+      .update({ status: "final", score_ft_team1: 2, score_ft_team2: 1 })
+      .eq("id", T.MATCH_KO);
+    await sleep(3000);
+
+    // Verify the multiplier was applied.
+    const { data: scored } = await admin
+      .from("predictions")
+      .select("multiplier, points_earned")
+      .eq("user_id", alice.userId)
+      .eq("match_id", T.MATCH_KO)
+      .single();
+    expect(scored?.multiplier).toBe(4);
+    expect(scored?.points_earned).toBe(20);
+
+    // Now DELETE the booster post-final.
+    await admin
+      .from("round_boosters")
+      .delete()
+      .eq("user_id", alice.userId)
+      .eq("round", "QF");
+    await sleep(500);
+
+    // The prediction's multiplier is STALE — no DELETE trigger rewrites it.
+    const { data: after } = await admin
+      .from("predictions")
+      .select("multiplier, points_earned")
+      .eq("user_id", alice.userId)
+      .eq("match_id", T.MATCH_KO)
+      .single();
+    // KNOWN GAP: should be 1 / 5; currently 4 / 20.
+    expect(after?.multiplier).toBe(4);
+    expect(after?.points_earned).toBe(20);
+
+    // Cleanup
+    await admin.from("predictions").delete().eq("match_id", T.MATCH_KO);
+    await admin
+      .from("matches")
+      .update({ status: "scheduled", score_ft_team1: null, score_ft_team2: null })
+      .eq("id", T.MATCH_KO);
+  });
+
+  test("GAP: MOVE booster after old match final leaves old prediction stuck", async () => {
+    await admin.from("predictions").delete().in("match_id", [T.MATCH_KO, T.MATCH_ET]);
+    await admin.from("match_events").delete().in("match_id", [T.MATCH_KO, T.MATCH_ET]);
+    // MATCH_ET ships with past kickoff — push to future so the upsert
+    // passes the lock trigger.
+    const f = future();
+    await admin
+      .from("matches")
+      .update({ status: "scheduled", score_ft_team1: null, score_ft_team2: null, kickoff_time: f })
+      .eq("id", T.MATCH_ET);
+    await admin
+      .from("matches")
+      .update({ status: "scheduled", score_ft_team1: null, score_ft_team2: null })
+      .eq("id", T.MATCH_KO);
+
+    await admin.from("round_boosters").insert({
+      user_id: alice.userId, round: "QF", match_id: T.MATCH_KO, multiplier: 4,
+    });
+    await admin.from("predictions").insert([
+      { user_id: alice.userId, match_id: T.MATCH_KO, predicted_team1: 2, predicted_team2: 1 },
+      { user_id: alice.userId, match_id: T.MATCH_ET, predicted_team1: 1, predicted_team2: 0 },
+    ]);
+    // Finalise MATCH_KO → alice's prediction.multiplier = 4.
+    await admin
+      .from("matches")
+      .update({ status: "final", score_ft_team1: 2, score_ft_team2: 1 })
+      .eq("id", T.MATCH_KO);
+    await sleep(3000);
+
+    const { data: koScored } = await admin
+      .from("predictions")
+      .select("multiplier, points_earned")
+      .eq("user_id", alice.userId)
+      .eq("match_id", T.MATCH_KO)
+      .single();
+    expect(koScored?.multiplier).toBe(4);
+    expect(koScored?.points_earned).toBe(20);
+
+    // Now MOVE the booster to MATCH_ET (still scheduled). The
+    // (user_id, round) PK upsert replaces the row in-place.
+    await admin.from("round_boosters").upsert(
+      { user_id: alice.userId, round: "QF", match_id: T.MATCH_ET, multiplier: 4 },
+      { onConflict: "user_id,round" },
+    );
+    await sleep(500);
+
+    // MATCH_KO's prediction.multiplier is STALE — nothing recomputed
+    // the old match when the booster row moved.
+    const { data: koAfter } = await admin
+      .from("predictions")
+      .select("multiplier, points_earned")
+      .eq("user_id", alice.userId)
+      .eq("match_id", T.MATCH_KO)
+      .single();
+    // KNOWN GAP: should be 1 / 5; currently 4 / 20.
+    expect(koAfter?.multiplier).toBe(4);
+    expect(koAfter?.points_earned).toBe(20);
+
+    // Cleanup — drop the booster, both predictions, restore MATCH_KO
+    // to scheduled, and shove MATCH_ET back to its past kickoff so
+    // the extra-time tests still see their expected state.
+    await admin
+      .from("round_boosters")
+      .delete()
+      .eq("user_id", alice.userId)
+      .eq("round", "QF");
+    await admin.from("predictions").delete().in("match_id", [T.MATCH_KO, T.MATCH_ET]);
+    await admin
+      .from("matches")
+      .update({ status: "scheduled", score_ft_team1: null, score_ft_team2: null })
+      .eq("id", T.MATCH_KO);
+    const past = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    await admin
+      .from("matches")
+      .update({ kickoff_time: past })
+      .eq("id", T.MATCH_ET);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 7. EDGE CASES
 // ─────────────────────────────────────────────────────────────────────────────
 
