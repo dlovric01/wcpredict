@@ -2873,12 +2873,23 @@ class _BoosterToggleState extends ConsumerState<_BoosterToggle> {
                     AppColors.onSurface,
                   );
 
-    final subtitle = appliedHere
-        ? 'Applied — your score is multiplied by $multiplier'
-        : usedElsewhere
-            ? 'Currently on another $round match · tap to move it here'
-            : 'Use your $round booster on this match';
+    // Once the host match locks (status flipped or wall-clock passed
+    // kickoff), the booster row is no longer reversible from this
+    // screen: the DB lock trigger rejects INSERT/UPDATE pointing at a
+    // locked match, and migration 038 recomputes scoring when a booster
+    // is DELETEd. A switch tap here would either no-op or permanently
+    // strip the user's multiplier, so we render a non-interactive pill
+    // for the post-lock case.
+    final locked = widget.match.isLocked;
+    final lockedAndApplied = locked && appliedHere;
 
+    final subtitle = lockedAndApplied
+        ? 'Locked in — ×$multiplier multiplier is final'
+        : appliedHere
+            ? 'Applied — your score is multiplied by $multiplier'
+            : usedElsewhere
+                ? 'Currently on another $round match · tap to move it here'
+                : 'Use your $round booster on this match';
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
@@ -2920,6 +2931,14 @@ class _BoosterToggleState extends ConsumerState<_BoosterToggle> {
               width: 20,
               height: 20,
               child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          else if (lockedAndApplied)
+            // No switch — the multiplier is committed. The lock icon
+            // mirrors the state of the rest of the locked UI.
+            Icon(
+              Icons.lock_outline,
+              size: 18,
+              color: iconColor,
             )
           else
             Switch(
@@ -2995,10 +3014,51 @@ class _BoosterMoveConfirmSheet extends ConsumerWidget {
                 style: theme.textTheme.bodySmall
                     ?.copyWith(color: AppColors.error),
               ),
-              data: (fromMatch) => _MoveSheetMatchBlock(
-                match: fromMatch,
-                prediction: fromPredAsync.valueOrNull,
-                multiplier: multiplier,
+              data: (fromMatch) => Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _MoveSheetMatchBlock(
+                    match: fromMatch,
+                    prediction: fromPredAsync.valueOrNull,
+                    multiplier: multiplier,
+                  ),
+                  if (fromMatch.isLocked) ...[
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: AppColors.errorContainer
+                            .withValues(alpha: 0.25),
+                        borderRadius: AppRadii.cardRadius,
+                        border: Border.all(
+                          color: AppColors.error.withValues(alpha: 0.4),
+                        ),
+                      ),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Icon(
+                            Icons.warning_amber_outlined,
+                            size: 16,
+                            color: AppColors.error,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'This match has already kicked off. '
+                              'Moving your booster will recompute its '
+                              'score without the ×$multiplier multiplier.',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: AppColors.error,
+                                height: 1.35,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ],
               ),
             ),
           ),
