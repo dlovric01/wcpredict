@@ -1102,6 +1102,7 @@ class _DayFilterBar extends StatefulWidget {
 class _DayFilterBarState extends State<_DayFilterBar> {
   final ScrollController _ctrl = ScrollController();
   bool _centered = false;
+  double? _viewportWidth;
 
   @override
   void dispose() {
@@ -1109,16 +1110,30 @@ class _DayFilterBarState extends State<_DayFilterBar> {
     super.dispose();
   }
 
-  void _centerOnToday(double viewportWidth) {
-    // Today is at index kDayWindowRadius in the day window. The chip
-    // bar lays out as: [padding][chip0][gap][chip1]…[chipN][gap][ALL].
-    // Center of chip i is at: padding + i*(width+gap) + width/2.
-    final centerOfToday = _kBarHorizontalPadding +
-        kDayWindowRadius * (_kChipWidth + _kChipGap) +
+  /// Scrolls the chip at [index] (0..days.length, where days.length is
+  /// the ALL chip slot) into the viewport center. No-op when the
+  /// controller hasn't attached yet or the viewport width is unknown.
+  /// `animate` controls the easing: `false` for the initial mount
+  /// (instant), `true` for user-driven taps (smooth).
+  void _centerOnIndex(int index, {required bool animate}) {
+    final viewportWidth = _viewportWidth;
+    if (viewportWidth == null || !_ctrl.hasClients) return;
+    // Layout: [padding][chip0][gap][chip1]…[gap][chipN].
+    // Center of chip i = padding + i*(width+gap) + width/2.
+    final chipCenter = _kBarHorizontalPadding +
+        index * (_kChipWidth + _kChipGap) +
         _kChipWidth / 2;
-    final target = (centerOfToday - viewportWidth / 2)
+    final target = (chipCenter - viewportWidth / 2)
         .clamp(0.0, _ctrl.position.maxScrollExtent);
-    _ctrl.jumpTo(target);
+    if (animate) {
+      _ctrl.animateTo(
+        target,
+        duration: const Duration(milliseconds: 240),
+        curve: Curves.easeOutCubic,
+      );
+    } else {
+      _ctrl.jumpTo(target);
+    }
   }
 
   @override
@@ -1136,10 +1151,11 @@ class _DayFilterBarState extends State<_DayFilterBar> {
           Expanded(
             child: LayoutBuilder(
               builder: (context, constraints) {
+                _viewportWidth = constraints.maxWidth;
                 if (!_centered) {
                   WidgetsBinding.instance.addPostFrameCallback((_) {
                     if (mounted && _ctrl.hasClients && !_centered) {
-                      _centerOnToday(constraints.maxWidth);
+                      _centerOnIndex(kDayWindowRadius, animate: false);
                       _centered = true;
                     }
                   });
@@ -1162,13 +1178,19 @@ class _DayFilterBarState extends State<_DayFilterBar> {
                         isToday: isSameLocalDay(day, widget.today),
                         isSelected: widget.selectedDay != null &&
                             isSameLocalDay(day, widget.selectedDay!),
-                        onTap: () => widget.onSelect(day),
+                        onTap: () {
+                          widget.onSelect(day);
+                          _centerOnIndex(i, animate: true);
+                        },
                         theme: theme,
                       );
                     }
                     return _AllChip(
                       isSelected: widget.selectedDay == null,
-                      onTap: () => widget.onSelect(null),
+                      onTap: () {
+                        widget.onSelect(null);
+                        _centerOnIndex(days.length, animate: true);
+                      },
                       theme: theme,
                     );
                   },
