@@ -9,6 +9,7 @@ import 'package:wcpredict/core/models/match_model.dart';
 import 'package:wcpredict/core/models/player_model.dart';
 import 'package:wcpredict/core/models/prediction_model.dart';
 import 'package:wcpredict/core/models/team_model.dart';
+import 'package:wcpredict/core/models/round_booster_model.dart';
 import 'package:wcpredict/core/supabase_client.dart';
 import 'package:wcpredict/core/theme/app_colors.dart';
 import 'package:wcpredict/core/theme/app_radii.dart';
@@ -19,14 +20,13 @@ import 'package:wcpredict/features/matches/live_events_widget.dart';
 import 'package:wcpredict/features/matches/live_scoring.dart';
 import 'package:wcpredict/shared/providers/match_detail_provider.dart';
 import 'package:wcpredict/shared/providers/matches_provider.dart';
-import 'package:wcpredict/shared/providers/match_others_provider.dart';
+import 'package:wcpredict/shared/providers/match_predictions_provider.dart';
 import 'package:wcpredict/shared/utils/live_minute.dart';
 import 'package:wcpredict/shared/utils/score_format.dart';
 import 'package:wcpredict/shared/utils/player_name_format.dart';
 import 'package:wcpredict/shared/providers/predictions_provider.dart';
 import 'package:wcpredict/shared/widgets/team_flag.dart';
 import 'package:wcpredict/shared/widgets/countdown_pill.dart';
-import 'package:wcpredict/shared/widgets/verdict_pill.dart';
 import 'package:wcpredict/shared/providers/boosters_provider.dart';
 import 'package:wcpredict/shared/widgets/app_sheet.dart';
 import 'package:wcpredict/shared/widgets/app_feedback.dart';
@@ -55,15 +55,16 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen>
 
   static const Map<String, int> _tabIndexByName = {
     'overview': 0,
-    'predict': 1,
+    'predict': 1,        // Legacy alias for the merged tab
+    'predictions': 1,
     'teams': 2,
-    'others': 3,
+    'others': 1,         // Legacy alias for the merged tab (lands on PREDICTIONS)
   };
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 4, vsync: this);
+    _tabController = TabController(length: 3, vsync: this);
     final override = widget.initialTab?.toLowerCase();
     final idx = override == null ? null : _tabIndexByName[override];
     if (idx != null) {
@@ -156,9 +157,8 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen>
                 controller: _tabController,
                 tabs: const [
                   Tab(text: 'OVERVIEW'),
-                  Tab(text: 'PREDICT'),
+                  Tab(text: 'PREDICTIONS'),
                   Tab(text: 'TEAMS'),
-                  Tab(text: 'OTHERS'),
                 ],
                 labelColor: AppColors.primary,
                 unselectedLabelColor: AppColors.onSurfaceMuted,
@@ -182,14 +182,13 @@ class _MatchDetailScreenState extends ConsumerState<MatchDetailScreen>
                       prediction: predAsync.valueOrNull,
                       onPredictTap: () => _tabController.animateTo(1),
                     ),
-                    _PredictTab(
+                    _PredictionsTab(
                       match: match,
                       matchId: widget.matchId,
                       existing: predAsync.valueOrNull,
                       onSaved: () => _tabController.animateTo(0),
                     ),
                     _TeamsTab(match: match),
-                    _OthersTab(match: match, matchId: widget.matchId),
                   ],
                 ),
               ),
@@ -806,11 +805,12 @@ class _PredictionSummaryCard extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Predict Tab
+// Predictions Tab — single surface that owns both the pre-lock predict
+// form AND the post-lock ranked list (self pinned, opponents below).
 // ---------------------------------------------------------------------------
 
-class _PredictTab extends ConsumerStatefulWidget {
-  const _PredictTab({
+class _PredictionsTab extends ConsumerStatefulWidget {
+  const _PredictionsTab({
     required this.match,
     required this.matchId,
     required this.existing,
@@ -822,10 +822,10 @@ class _PredictTab extends ConsumerStatefulWidget {
   final VoidCallback onSaved;
 
   @override
-  ConsumerState<_PredictTab> createState() => _PredictTabState();
+  ConsumerState<_PredictionsTab> createState() => _PredictionsTabState();
 }
 
-class _PredictTabState extends ConsumerState<_PredictTab> {
+class _PredictionsTabState extends ConsumerState<_PredictionsTab> {
   late int _score1;
   late int _score2;
   int? _firstTeamId;
@@ -858,7 +858,7 @@ class _PredictTabState extends ConsumerState<_PredictTab> {
   }
 
   @override
-  void didUpdateWidget(_PredictTab old) {
+  void didUpdateWidget(_PredictionsTab old) {
     super.didUpdateWidget(old);
     if (old.existing == null && widget.existing != null) {
       final p = widget.existing!;
@@ -949,289 +949,167 @@ class _PredictTabState extends ConsumerState<_PredictTab> {
         overlayStatus == 'cancelled';
 
     // ── Locked state ─────────────────────────────────────────────────────
+    // Match has started (or finished, or been cancelled). The form is
+    // replaced by the merged predictions list: self pinned at the top
+    // with their own picks + live points chips always visible (computed
+    // from realtime events while the match is in play, settled from
+    // points_earned once status='final'), then every group-mate who
+    // predicted this match sorted by current points.
     if (locked) {
-      final pred = widget.existing;
-      final isFinal = widget.match.status == 'final';
+      return _LockedPredictionsList(
+        match: widget.match,
+        matchId: widget.matchId,
+      );
+    }
 
-      return SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              decoration: BoxDecoration(
-                color: AppColors.surfaceHigh,
-                borderRadius: AppRadii.buttonRadius,
-                border: Border.all(color: AppColors.locked),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.lock_outline,
-                      color: AppColors.locked, size: 15),
-                  const SizedBox(width: 8),
-                  Text(
-                    isFinal
-                        ? 'Predictions closed · Full time'
-                        : 'Predictions locked · Match has started',
-                    style: theme.textTheme.bodySmall
-                        ?.copyWith(color: AppColors.locked),
+    // ── Unlocked form ─────────────────────────────────────────────────
+    // Whole form scrolls as a single surface — score pickers, divider,
+    // optional pickers — so the layout adapts gracefully to any device
+    // size (and to any preview-screen scenario bar pinned underneath).
+    // The save button sits outside the scroll, glued to the bottom.
+    return Column(
+      children: [
+        Expanded(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(0, 16, 0, 32),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // ── Score pickers ──────────────────────────────────────────
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: [
+                      Expanded(
+                        child: _ScorePicker(
+                          value: _score1,
+                          team: t1,
+                          onChanged: _setScore1,
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: Text(
+                          '–',
+                          style: theme.textTheme.displaySmall?.copyWith(
+                            color: AppColors.onSurfaceMuted,
+                            fontFeatures: const [FontFeature.tabularFigures()],
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: _ScorePicker(
+                          value: _score2,
+                          team: t2,
+                          onChanged: _setScore2,
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-            if (pred == null) ...[
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: AppColors.surface,
-                  borderRadius: AppRadii.cardRadius,
-                  border: Border.all(color: AppColors.outline),
                 ),
-                child: Row(
-                  children: [
-                    const Icon(Symbols.lock,
-                        size: 16, color: AppColors.onSurfaceVariant),
-                    const SizedBox(width: 8),
-                    Text(
-                      'No prediction submitted',
-                      style: theme.textTheme.bodyMedium
-                          ?.copyWith(color: AppColors.onSurfaceVariant),
-                    ),
-                  ],
-                ),
-              ),
-            ] else ...[
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: AppColors.surface,
-                  borderRadius: AppRadii.cardRadius,
-                  border: Border.all(color: AppColors.outline),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      isFinal ? 'Your Result' : 'Your Prediction',
-                      style: theme.textTheme.titleSmall
-                          ?.copyWith(color: AppColors.onSurface),
-                    ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                const SizedBox(height: 8),
+                const Divider(height: 1),
+                // ── Optional pickers + multiplier/booster badges ──────────
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // Auto-multiplier badge (3rd place / Final)
+                      if (widget.match.autoMultiplier > 1) ...[
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 12, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: AppColors.primaryContainer
+                                .withValues(alpha: 0.35),
+                            borderRadius: AppRadii.cardRadius,
+                            border: Border.all(
+                                color:
+                                    AppColors.primary.withValues(alpha: 0.4)),
+                          ),
+                          child: Row(
                             children: [
+                              const Icon(Icons.bolt,
+                                  size: 16, color: AppColors.primary),
+                              const SizedBox(width: 8),
                               Text(
-                                isFinal ? 'Actual' : 'Live',
-                                style: theme.textTheme.labelSmall?.copyWith(
-                                    color: AppColors.onSurfaceVariant),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                formatScore(
-                                  widget.match.scoreFtTeam1,
-                                  widget.match.scoreFtTeam2,
-                                ),
-                                style: theme.textTheme.titleLarge?.copyWith(
-                                  color: AppColors.onSurface,
-                                  fontWeight: FontWeight.w800,
-                                  fontFeatures: const [
-                                    FontFeature.tabularFigures()
-                                  ],
+                                '${widget.match.round} · auto ×${widget.match.autoMultiplier} multiplier',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: AppColors.primary,
+                                  fontWeight: FontWeight.w600,
                                 ),
                               ),
                             ],
                           ),
                         ),
-                        Container(
-                            width: 1, height: 40, color: AppColors.outline),
-                        Expanded(
-                          child: Padding(
-                            padding: const EdgeInsets.only(left: 16),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'You',
-                                  style: theme.textTheme.labelSmall?.copyWith(
-                                      color: AppColors.onSurfaceVariant),
+                        const SizedBox(height: 16),
+                      ],
+
+                      // User booster toggle (R32/R16/QF/SF)
+                      if (widget.match.isBoosterRound) ...[
+                        _BoosterToggle(
+                          match: widget.match,
+                          matchId: widget.matchId,
+                        ),
+                        const SizedBox(height: 16),
+                      ],
+
+                      if (_isZeroZero)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 16),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.info_outline,
+                                  size: 14,
+                                  color: AppColors.onSurfaceMuted),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Text(
+                                  'Set a score to unlock first-team & goalscorer picks',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                      color: AppColors.onSurfaceMuted),
                                 ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  '${pred.predictedTeam1 ?? '?'}'
-                                  ' – '
-                                  '${pred.predictedTeam2 ?? '?'}',
-                                  style: theme.textTheme.titleLarge?.copyWith(
-                                    color: AppColors.onSurface,
-                                    fontWeight: FontWeight.w800,
-                                    fontFeatures: const [
-                                      FontFeature.tabularFigures()
-                                    ],
-                                  ),
-                                ),
-                              ],
-                            ),
+                              ),
+                            ],
                           ),
                         ),
-                      ],
-                    ),
-                    if (isFinal && pred.pointsEarned != null) ...[
-                      const SizedBox(height: 12),
-                      VerdictPill(
-                          points: pred.pointsEarned,
-                          pointsMatch: pred.pointsMatch,
-                          pointsFirstTeam: pred.pointsFirstTeam,
-                          pointsGoalscorer: pred.pointsGoalscorer,
-                          multiplier: pred.multiplier),
-                    ] else if (!isFinal) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        'Points update at full time',
-                        style: theme.textTheme.bodySmall
-                            ?.copyWith(color: AppColors.onSurfaceMuted),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-            ],
-          ],
-        ),
-      );
-    }
 
-    // ── Unlocked form ─────────────────────────────────────────────────
-    return Column(
-      children: [
-        // ── Fixed score pickers (never scroll) ─────────────────────────────
-        Padding(
-          padding: const EdgeInsets.fromLTRB(24, 16, 24, 8),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              Expanded(
-                child: _ScorePicker(
-                  value: _score1,
-                  team: t1,
-                  onChanged: _setScore1,
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Text(
-                  '–',
-                  style: theme.textTheme.displaySmall?.copyWith(
-                    color: AppColors.onSurfaceMuted,
-                    fontFeatures: const [FontFeature.tabularFigures()],
-                  ),
-                ),
-              ),
-              Expanded(
-                child: _ScorePicker(
-                  value: _score2,
-                  team: t2,
-                  onChanged: _setScore2,
-                ),
-              ),
-            ],
-          ),
-        ),
-
-        const Divider(height: 1),
-
-        // ── Scrollable: first scorer + goalscorer ───────────────────────────
-        Expanded(
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
-            children: [
-              // Auto-multiplier badge (3rd place / Final)
-              if (widget.match.autoMultiplier > 1) ...[
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: AppColors.primaryContainer.withValues(alpha: 0.35),
-                    borderRadius: AppRadii.cardRadius,
-                    border: Border.all(
-                        color: AppColors.primary.withValues(alpha: 0.4)),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.bolt,
-                          size: 16, color: AppColors.primary),
-                      const SizedBox(width: 8),
-                      Text(
-                        '${widget.match.round} · auto ×${widget.match.autoMultiplier} multiplier',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: AppColors.primary,
-                          fontWeight: FontWeight.w600,
+                      if (!_isZeroZero) ...[
+                        Text(
+                          'First team to score (optional · +2 pts)',
+                          style: theme.textTheme.labelLarge?.copyWith(
+                              color: AppColors.onSurfaceVariant),
                         ),
-                      ),
+                        const SizedBox(height: 8),
+                        FirstTeamPicker(
+                          match: widget.match,
+                          selectedTeamId: _firstTeamId,
+                          score1: _score1,
+                          score2: _score2,
+                          onPick: (id) =>
+                              setState(() => _firstTeamId = id),
+                        ),
+                        const SizedBox(height: 20),
+                        Text(
+                          'Goalscorer (optional · +8 pts)',
+                          style: theme.textTheme.labelLarge?.copyWith(
+                              color: AppColors.onSurfaceVariant),
+                        ),
+                        const SizedBox(height: 8),
+                        _ScorerPickerButton(
+                          scorerId: _scorerId,
+                          match: widget.match,
+                          onPick: (id) =>
+                              setState(() => _scorerId = id),
+                        ),
+                      ],
                     ],
                   ),
                 ),
-                const SizedBox(height: 16),
               ],
-
-              // User booster toggle (R32/R16/QF/SF)
-              if (widget.match.isBoosterRound) ...[
-                _BoosterToggle(
-                  match: widget.match,
-                  matchId: widget.matchId,
-                ),
-                const SizedBox(height: 16),
-              ],
-
-              if (_isZeroZero)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 16),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.info_outline,
-                          size: 14, color: AppColors.onSurfaceMuted),
-                      const SizedBox(width: 6),
-                      Text(
-                        'Set a score to unlock first-team & goalscorer picks',
-                        style: theme.textTheme.bodySmall
-                            ?.copyWith(color: AppColors.onSurfaceMuted),
-                      ),
-                    ],
-                  ),
-                ),
-
-              if (!_isZeroZero) ...[
-                Text(
-                  'First team to score (optional · +2 pts)',
-                  style: theme.textTheme.labelLarge
-                      ?.copyWith(color: AppColors.onSurfaceVariant),
-                ),
-                const SizedBox(height: 8),
-                FirstTeamPicker(
-                  match: widget.match,
-                  selectedTeamId: _firstTeamId,
-                  score1: _score1,
-                  score2: _score2,
-                  onPick: (id) => setState(() => _firstTeamId = id),
-                ),
-                const SizedBox(height: 20),
-                Text(
-                  'Goalscorer (optional · +8 pts)',
-                  style: theme.textTheme.labelLarge
-                      ?.copyWith(color: AppColors.onSurfaceVariant),
-                ),
-                const SizedBox(height: 8),
-                _ScorerPickerButton(
-                  scorerId: _scorerId,
-                  match: widget.match,
-                  onPick: (id) => setState(() => _scorerId = id),
-                ),
-              ],
-              const SizedBox(height: 32),
-            ],
+            ),
           ),
         ),
 
@@ -1642,39 +1520,49 @@ class _TeamHeader extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// Others Tab — every group-mate's predicted points for THIS match
+// PREDICTIONS Tab — locked view
 // ---------------------------------------------------------------------------
+// Pinned-at-top self row + ranked group-mate list, both driven by the
+// realtime providers in `match_predictions_provider.dart`. Rendered by
+// `_PredictionsTab` once a match is locked (kickoff has passed); the
+// editable form takes over pre-lock.
 
-class _OthersTab extends ConsumerWidget {
-  const _OthersTab({required this.match, required this.matchId});
+class _LockedPredictionsList extends ConsumerWidget {
+  const _LockedPredictionsList({required this.match, required this.matchId});
   final MatchModel match;
   final int matchId;
 
   String _headerCopy() {
-    if (match.status == 'final') return 'Final results';
-    if (match.status == 'live') {
-      return 'Live potential — updates as the match progresses';
+    switch (match.status) {
+      case 'final':
+        return 'Final results';
+      case 'live':
+        return 'Live potential — updates as the match progresses';
+      case 'cancelled':
+        return 'Match cancelled';
+      default:
+        // Locked via wall-clock (kickoff passed) but status hasn't flipped
+        // to 'live' yet — cron lag window.
+        return 'Predictions locked · Match has started';
     }
-    return 'Predictions visible after kickoff';
   }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final theme = Theme.of(context);
-    final rowsAsync = ref.watch(othersForMatchProvider(matchId));
-    final picksRevealed = match.status == 'final';
+    final rowsAsync = ref.watch(predictionsForMatchProvider(matchId));
 
     Future<void> refresh() async {
-      // Refresh the whole chain: profile set, predictions, boosters, events.
-      // matchByIdProvider is invalidated too in case status flipped between
-      // navigations — `othersForMatchProvider` depends on it.
-      ref.invalidate(myGroupmatesProvider);
+      // Refresh the whole chain: participant set, predictions, boosters,
+      // events. matchByIdProvider is invalidated too in case status flipped
+      // between navigations — `predictionsForMatchProvider` depends on it.
+      ref.invalidate(predictionParticipantsProvider);
       ref.invalidate(matchPredictionsByUserProvider(matchId));
       ref.invalidate(matchBoostersByUserProvider(matchId));
       ref.invalidate(matchByIdProvider(matchId));
       // Wait for the family's next emission so the spinner stays up
       // until fresh data lands, not just until the invalidate returns.
-      await ref.read(othersForMatchProvider(matchId).future);
+      await ref.read(predictionsForMatchProvider(matchId).future);
     }
 
     Widget wrapWithRefresh(Widget child) => RefreshIndicator(
@@ -1694,7 +1582,7 @@ class _OthersTab extends ConsumerWidget {
           padding: const EdgeInsets.fromLTRB(24, 64, 24, 24),
           children: [
             Text(
-              'Could not load group-mates.\nPull to retry.\n\n$e',
+              'Could not load predictions.\nPull to retry.\n\n$e',
               textAlign: TextAlign.center,
               style: theme.textTheme.bodyMedium
                   ?.copyWith(color: AppColors.onSurfaceMuted),
@@ -1705,11 +1593,10 @@ class _OthersTab extends ConsumerWidget {
       data: (rows) {
         if (rows.isEmpty) {
           return wrapWithRefresh(
-            _TabEmptyState(
+            const _TabEmptyState(
               icon: Symbols.group,
-              primaryText: match.status == 'scheduled'
-                  ? 'No predictions from your group-mates yet.\nPull to refresh.'
-                  : 'None of your group-mates predicted this match.',
+              primaryText:
+                  'No predictions for this match yet.\nPull to refresh.',
             ),
           );
         }
@@ -1734,11 +1621,7 @@ class _OthersTab extends ConsumerWidget {
                 );
               }
               final row = rows[index - 1];
-              return _OthersRowTile(
-                row: row,
-                match: match,
-                picksRevealed: picksRevealed,
-              );
+              return _PredictionRowTile(row: row, match: match);
             },
           ),
         );
@@ -1747,19 +1630,26 @@ class _OthersTab extends ConsumerWidget {
   }
 }
 
-class _OthersRowTile extends StatelessWidget {
-  const _OthersRowTile({
-    required this.row,
-    required this.match,
-    required this.picksRevealed,
-  });
+/// Single row on the predictions list — works for self and opponents.
+///
+/// Self-specific treatment (driven by [PredictionRow.isSelf]):
+///   * Name reads "You" instead of the profile display name.
+///   * Avatar uses the primary accent tint instead of the neutral surface.
+///   * Card border is accented so it pops from the opponent list.
+///   * Picks (Predicted / Live + scores + chips) are ALWAYS revealed
+///     because they're not a spoiler to the owner — even mid-match.
+///   * If self never predicted, the tile collapses to a compact
+///     "You didn't predict this match" placeholder instead.
+///
+/// Opponent rows reveal picks only at FT (existing spoiler rule).
+class _PredictionRowTile extends StatelessWidget {
+  const _PredictionRowTile({required this.row, required this.match});
 
-  final OthersRow row;
+  final PredictionRow row;
   final MatchModel match;
-  final bool picksRevealed;
 
   /// Tier-color matches the `_PointsBadge` rule in `user_predictions_screen.dart`
-  /// so the OTHERS leaderboard reads like the per-user predictions list.
+  /// so the leaderboard reads like the per-user predictions list.
   Color _pointColor(int? earned, {required bool isFinal}) {
     if (!isFinal) return AppColors.onSurfaceMuted;
     if (earned == null) return AppColors.onSurfaceMuted;
@@ -1774,14 +1664,55 @@ class _OthersRowTile extends StatelessWidget {
     final isFinal = match.status == 'final';
     final isLive = match.status == 'live';
     final theme = Theme.of(context);
+    final prediction = row.prediction;
+
+    // Self with no prediction → compact placeholder card.
+    if (row.isSelf && prediction == null) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+        child: Container(
+          decoration: BoxDecoration(
+            color: AppColors.surfaceHigh,
+            borderRadius: AppRadii.cardRadius,
+            border: Border.all(
+              color: AppColors.primary.withValues(alpha: 0.35),
+              width: 1.5,
+            ),
+          ),
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              const Icon(Symbols.lock,
+                  size: 18, color: AppColors.onSurfaceVariant),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  "You didn't predict this match",
+                  style: theme.textTheme.bodyMedium
+                      ?.copyWith(color: AppColors.onSurfaceVariant),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     final name = row.profile.displayName?.trim();
-    final label = (name == null || name.isEmpty) ? '—' : name;
-    final initial = label.substring(0, 1).toUpperCase();
+    final fallback = (name == null || name.isEmpty) ? '—' : name;
+    final label = row.isSelf ? 'You' : fallback;
+    // Initial always comes off the real display name (or fallback "—")
+    // so the self avatar still shows the user's first letter, not "Y".
+    final initial = fallback.substring(0, 1).toUpperCase();
 
     final score = row.score;
     final total = (score != null && (isFinal || isLive)) ? score.total : null;
     final pointColor = _pointColor(total, isFinal: isFinal);
-    final prediction = row.prediction;
+
+    // Self always reveals own picks; opponents only at FT.
+    final picksRevealed = row.isSelf || isFinal;
+    // Live block label flips to "Live" for in-play, "Actual" once final.
+    final actualLabel = isFinal ? 'Actual' : 'Live';
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
@@ -1789,78 +1720,81 @@ class _OthersRowTile extends StatelessWidget {
         decoration: BoxDecoration(
           color: AppColors.surfaceHigh,
           borderRadius: AppRadii.cardRadius,
+          border: row.isSelf
+              ? Border.all(
+                  color: AppColors.primary.withValues(alpha: 0.45),
+                  width: 1.5,
+                )
+              : null,
         ),
         child: Padding(
           padding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // ── Header: avatar + name | points badge ────────────────
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // ── Header: avatar + name | points badge ────────────────
+              Row(
+                children: [
+                  _PredictionAvatar(initial: initial, isSelf: row.isSelf),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      label,
+                      style: theme.textTheme.titleMedium?.copyWith(
+                        color: AppColors.onSurface,
+                        fontWeight: FontWeight.w700,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  _PredictionPointsBadge(total: total, color: pointColor),
+                ],
+              ),
+              // ── Predicted / Actual scores — revealed by `picksRevealed`
+              if (picksRevealed && prediction != null) ...[
+                const SizedBox(height: 10),
                 Row(
                   children: [
-                    _OthersAvatar(initial: initial),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        label,
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          color: AppColors.onSurface,
-                          fontWeight: FontWeight.w700,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                    _PredictionScoreBlock(
+                      label: 'Predicted',
+                      score1: prediction.predictedTeam1,
+                      score2: prediction.predictedTeam2,
+                      highlight: false,
                     ),
-                    const SizedBox(width: 8),
-                    _OthersPointsBadge(total: total, color: pointColor),
+                    const SizedBox(width: 20),
+                    _PredictionScoreBlock(
+                      label: actualLabel,
+                      score1: match.scoreFtTeam1,
+                      score2: match.scoreFtTeam2,
+                      highlight: true,
+                    ),
                   ],
                 ),
-                // ── Predicted / Actual scores — only after FT ─────────────
-                // During `live`, we deliberately render JUST the points pill
-                // above so opponents can compete on potential points without
-                // anyone seeing each other's actual picks until the final
-                // whistle.
-                if (isFinal && prediction != null) ...[
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      _OthersScoreBlock(
-                        label: 'Predicted',
-                        score1: prediction.predictedTeam1,
-                        score2: prediction.predictedTeam2,
-                        highlight: false,
-                      ),
-                      const SizedBox(width: 20),
-                      _OthersScoreBlock(
-                        label: 'Actual',
-                        score1: match.scoreFtTeam1,
-                        score2: match.scoreFtTeam2,
-                        highlight: true,
-                      ),
-                    ],
-                  ),
-                ],
-                // ── Per-category chips: prediction picks + verdict merged
-                if (isFinal && prediction != null && score != null) ...[
-                  const SizedBox(height: 10),
-                  _OthersChips(
-                    prediction: prediction,
-                    match: match,
-                    score: score,
-                  ),
-                ],
               ],
-            ),
+              // ── Per-category chips: prediction picks + verdict merged
+              if (picksRevealed && prediction != null && score != null) ...[
+                const SizedBox(height: 10),
+                _PredictionChips(
+                  prediction: prediction,
+                  match: match,
+                  score: score,
+                ),
+              ],
+            ],
           ),
         ),
+      ),
     );
   }
 }
 
-class _OthersAvatar extends StatelessWidget {
-  const _OthersAvatar({required this.initial});
+class _PredictionAvatar extends StatelessWidget {
+  const _PredictionAvatar({required this.initial, this.isSelf = false});
   final String initial;
+  final bool isSelf;
 
   @override
   Widget build(BuildContext context) {
@@ -1868,15 +1802,20 @@ class _OthersAvatar extends StatelessWidget {
       width: 36,
       height: 36,
       decoration: BoxDecoration(
-        color: AppColors.surfaceHighest,
+        color: isSelf
+            ? AppColors.primaryContainer
+            : AppColors.surfaceHighest,
         shape: BoxShape.circle,
-        border: Border.all(color: AppColors.outline, width: 1),
+        border: Border.all(
+          color: isSelf ? AppColors.primary : AppColors.outline,
+          width: 1,
+        ),
       ),
       alignment: Alignment.center,
       child: Text(
         initial,
-        style: const TextStyle(
-          color: AppColors.onSurface,
+        style: TextStyle(
+          color: isSelf ? AppColors.onPrimaryContainer : AppColors.onSurface,
           fontWeight: FontWeight.w700,
         ),
       ),
@@ -1884,8 +1823,8 @@ class _OthersAvatar extends StatelessWidget {
   }
 }
 
-class _OthersPointsBadge extends StatelessWidget {
-  const _OthersPointsBadge({required this.total, required this.color});
+class _PredictionPointsBadge extends StatelessWidget {
+  const _PredictionPointsBadge({required this.total, required this.color});
   final int? total;
   final Color color;
 
@@ -1913,8 +1852,8 @@ class _OthersPointsBadge extends StatelessWidget {
   }
 }
 
-class _OthersScoreBlock extends StatelessWidget {
-  const _OthersScoreBlock({
+class _PredictionScoreBlock extends StatelessWidget {
+  const _PredictionScoreBlock({
     required this.label,
     required this.score1,
     required this.score2,
@@ -1953,7 +1892,7 @@ class _OthersScoreBlock extends StatelessWidget {
   }
 }
 
-/// One unified chip row per OTHERS tile (post-FT).
+/// Unified chip row per predictions tile.
 ///
 /// Each chip carries both the prediction's **context** (which team /
 /// player the user picked) and the **verdict** (points awarded), green
@@ -1965,8 +1904,8 @@ class _OthersScoreBlock extends StatelessWidget {
 /// - "First team: United States · 2pts" (only when user picked a first team)
 /// - "Scorer: C. Pulisic · 8pts" (only when user picked a goalscorer)
 /// - "×3 booster" (only on boosted knockout matches)
-class _OthersChips extends StatelessWidget {
-  const _OthersChips({
+class _PredictionChips extends StatelessWidget {
+  const _PredictionChips({
     required this.prediction,
     required this.match,
     required this.score,
@@ -1991,7 +1930,7 @@ class _OthersChips extends StatelessWidget {
     }
 
     final chips = <Widget>[
-      _OthersChip(
+      _PredictionChip(
         icon: score.pointsMatch > 0
             ? Icons.check_circle_outline
             : Icons.remove_circle_outline,
@@ -2002,7 +1941,7 @@ class _OthersChips extends StatelessWidget {
 
     final ft = prediction.predictedFirstTeamId;
     if (ft != null) {
-      chips.add(_OthersChip(
+      chips.add(_PredictionChip(
         icon: score.pointsFirstTeam > 0
             ? Icons.check_circle_outline
             : Icons.remove_circle_outline,
@@ -2016,7 +1955,7 @@ class _OthersChips extends StatelessWidget {
     if (sc != null) {
       final scorer = abbreviateFullName(_resolveScorerName(match, sc));
       if (scorer.isNotEmpty) {
-        chips.add(_OthersChip(
+        chips.add(_PredictionChip(
           icon: score.pointsGoalscorer > 0
               ? Icons.check_circle_outline
               : Icons.remove_circle_outline,
@@ -2027,7 +1966,7 @@ class _OthersChips extends StatelessWidget {
     }
 
     if (score.multiplier > 1) {
-      chips.add(_OthersChip(
+      chips.add(_PredictionChip(
         icon: Icons.bolt_outlined,
         label: '×${score.multiplier} booster',
         hit: true,
@@ -2038,8 +1977,8 @@ class _OthersChips extends StatelessWidget {
   }
 }
 
-class _OthersChip extends StatelessWidget {
-  const _OthersChip({
+class _PredictionChip extends StatelessWidget {
+  const _PredictionChip({
     required this.icon,
     required this.label,
     required this.hit,
@@ -2794,7 +2733,17 @@ class _PositionBadge extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// _BoosterToggle — apply/remove the round booster for a knockout match
+// _BoosterToggle — apply/remove the round booster for a knockout match.
+//
+// Three states:
+//   * Applied here     — booster row exists with matchId == this match
+//   * Used elsewhere   — booster row exists in this round but on another
+//                        match. Switch shows OFF + warning subtitle, and
+//                        tapping ON triggers `_BoosterMoveConfirmSheet`
+//                        so the user reviews the prediction they'd be
+//                        moving the multiplier away from.
+//   * Unused this round — no booster row for the round. Tapping ON
+//                         applies directly (no confirmation needed).
 // ---------------------------------------------------------------------------
 
 class _BoosterToggle extends ConsumerStatefulWidget {
@@ -2809,31 +2758,21 @@ class _BoosterToggle extends ConsumerStatefulWidget {
 class _BoosterToggleState extends ConsumerState<_BoosterToggle> {
   bool _saving = false;
 
-  Future<void> _toggle(bool active) async {
+  Future<void> _apply() async {
     if (_saving) return;
     setState(() => _saving = true);
     try {
       final user = supabase.auth.currentUser;
       if (user == null) return;
-      if (active) {
-        await supabase.from('round_boosters').upsert({
-          'user_id': user.id,
-          'round': widget.match.round,
-          'match_id': widget.matchId,
-          'multiplier': widget.match.boosterMultiplier,
-        }, onConflict: 'user_id,round');
-      } else {
-        await supabase
-            .from('round_boosters')
-            .delete()
-            .eq('user_id', user.id)
-            .eq('round', widget.match.round ?? '');
-      }
+      await supabase.from('round_boosters').upsert({
+        'user_id': user.id,
+        'round': widget.match.round,
+        'match_id': widget.matchId,
+        'multiplier': widget.match.boosterMultiplier,
+      }, onConflict: 'user_id,round');
       ref.invalidate(boosterForMatchProvider(widget.matchId));
       ref.invalidate(myBoostersProvider);
-      AppFeedback.success(active
-          ? 'Booster applied to this match'
-          : 'Booster removed');
+      AppFeedback.success('Booster applied to this match');
     } catch (e) {
       AppFeedback.error('Booster update failed: $e');
     } finally {
@@ -2841,32 +2780,118 @@ class _BoosterToggleState extends ConsumerState<_BoosterToggle> {
     }
   }
 
+  Future<void> _remove() async {
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      final user = supabase.auth.currentUser;
+      if (user == null) return;
+      await supabase
+          .from('round_boosters')
+          .delete()
+          .eq('user_id', user.id)
+          .eq('round', widget.match.round ?? '');
+      ref.invalidate(boosterForMatchProvider(widget.matchId));
+      ref.invalidate(myBoostersProvider);
+      AppFeedback.success('Booster removed');
+    } catch (e) {
+      AppFeedback.error('Booster update failed: $e');
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _onSwitchChanged(
+    bool active, {
+    required RoundBoosterModel? bookerElsewhere,
+  }) async {
+    if (!active) {
+      await _remove();
+      return;
+    }
+    if (bookerElsewhere != null) {
+      // `showAppSheet` opens at the root navigator, which sits OUTSIDE
+      // the nearest `ProviderScope`. Without re-injecting the same
+      // container, any provider the sheet reads (the FROM match, the
+      // user's prediction on it) falls through to production Supabase
+      // — and in the dev preview where those rows don't exist, the
+      // sheet renders an error. Capturing the container here and
+      // wrapping the sheet child in `UncontrolledProviderScope` keeps
+      // the modal aligned with the surface that triggered it.
+      final container = ProviderScope.containerOf(context);
+      final confirmed = await showAppSheet<bool>(
+        context: context,
+        builder: (_) => UncontrolledProviderScope(
+          container: container,
+          child: _BoosterMoveConfirmSheet(
+            round: widget.match.round ?? '',
+            multiplier: widget.match.boosterMultiplier,
+            fromMatchId: bookerElsewhere.matchId,
+            toMatchTeam1Code: widget.match.team1?.code,
+            toMatchTeam2Code: widget.match.team2?.code,
+          ),
+        ),
+      );
+      if (confirmed != true) return;
+    }
+    await _apply();
+  }
+
   @override
   Widget build(BuildContext context) {
     final boosterAsync = ref.watch(boosterForMatchProvider(widget.matchId));
-    final hasBooster = boosterAsync.valueOrNull != null;
+    final myBoostersAsync = ref.watch(myBoostersProvider);
+    final round = widget.match.round ?? '';
     final multiplier = widget.match.boosterMultiplier;
     final theme = Theme.of(context);
+
+    final appliedHere = boosterAsync.valueOrNull != null;
+    final roundBooster = myBoostersAsync.valueOrNull?[round];
+    final usedElsewhere = !appliedHere &&
+        roundBooster != null &&
+        roundBooster.matchId != widget.matchId;
+
+    final (Color bg, Color border, Color iconColor, Color titleColor) =
+        appliedHere
+            ? (
+                AppColors.primaryContainer.withValues(alpha: 0.35),
+                AppColors.primary.withValues(alpha: 0.5),
+                AppColors.primary,
+                AppColors.primary,
+              )
+            : usedElsewhere
+                ? (
+                    AppColors.secondaryContainer.withValues(alpha: 0.25),
+                    AppColors.secondary.withValues(alpha: 0.5),
+                    AppColors.secondary,
+                    AppColors.secondary,
+                  )
+                : (
+                    AppColors.surfaceHigh,
+                    AppColors.outlineVariant,
+                    AppColors.onSurfaceMuted,
+                    AppColors.onSurface,
+                  );
+
+    final subtitle = appliedHere
+        ? 'Applied — your score is multiplied by $multiplier'
+        : usedElsewhere
+            ? 'Currently on another $round match · tap to move it here'
+            : 'Use your $round booster on this match';
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: hasBooster
-            ? AppColors.primaryContainer.withValues(alpha: 0.35)
-            : AppColors.surfaceHigh,
+        color: bg,
         borderRadius: AppRadii.cardRadius,
-        border: Border.all(
-          color: hasBooster
-              ? AppColors.primary.withValues(alpha: 0.5)
-              : AppColors.outlineVariant,
-        ),
+        border: Border.all(color: border),
       ),
       child: Row(
         children: [
           Icon(
-            hasBooster ? Icons.bolt : Icons.bolt_outlined,
+            appliedHere ? Icons.bolt : Icons.bolt_outlined,
             size: 18,
-            color: hasBooster ? AppColors.primary : AppColors.onSurfaceMuted,
+            color: iconColor,
           ),
           const SizedBox(width: 10),
           Expanded(
@@ -2874,16 +2899,14 @@ class _BoosterToggleState extends ConsumerState<_BoosterToggle> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '${widget.match.round} Booster ×$multiplier',
+                  '$round Booster ×$multiplier',
                   style: theme.textTheme.labelMedium?.copyWith(
                     fontWeight: FontWeight.w700,
-                    color: hasBooster ? AppColors.primary : AppColors.onSurface,
+                    color: titleColor,
                   ),
                 ),
                 Text(
-                  hasBooster
-                      ? 'Applied — your score is multiplied by $multiplier'
-                      : 'Use your ${widget.match.round} booster on this match',
+                  subtitle,
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: AppColors.onSurfaceVariant,
                   ),
@@ -2900,12 +2923,294 @@ class _BoosterToggleState extends ConsumerState<_BoosterToggle> {
             )
           else
             Switch(
-              value: hasBooster,
-              onChanged: _toggle,
+              value: appliedHere,
+              onChanged: (v) => _onSwitchChanged(
+                v,
+                bookerElsewhere: usedElsewhere ? roundBooster : null,
+              ),
               activeTrackColor: AppColors.primary,
             ),
         ],
       ),
+    );
+  }
+}
+
+/// Bottom sheet that confirms moving the round booster from one match
+/// to another. Renders the *current* match (the one losing the booster)
+/// with its teams + the user's prediction picks so the user has full
+/// context before they commit.
+class _BoosterMoveConfirmSheet extends ConsumerWidget {
+  const _BoosterMoveConfirmSheet({
+    required this.round,
+    required this.multiplier,
+    required this.fromMatchId,
+    required this.toMatchTeam1Code,
+    required this.toMatchTeam2Code,
+  });
+
+  final String round;
+  final int multiplier;
+  final int fromMatchId;
+  final String? toMatchTeam1Code;
+  final String? toMatchTeam2Code;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final theme = Theme.of(context);
+    final fromMatchAsync = ref.watch(matchByIdProvider(fromMatchId));
+    final fromPredAsync = ref.watch(myPredictionProvider(fromMatchId));
+    final toLabel = toMatchTeam1Code != null && toMatchTeam2Code != null
+        ? '$toMatchTeam1Code vs $toMatchTeam2Code'
+        : 'this match';
+
+    return AppSheetBody(
+      title: 'Move your $round booster?',
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Confirming will remove the ×$multiplier multiplier from '
+            'the match below and apply it to $toLabel instead.',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: AppColors.onSurfaceVariant,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: AppColors.surfaceHigh,
+              borderRadius: AppRadii.cardRadius,
+              border: Border.all(color: AppColors.outlineVariant),
+            ),
+            child: fromMatchAsync.when(
+              loading: () => const SizedBox(
+                height: 80,
+                child: Center(child: CircularProgressIndicator()),
+              ),
+              error: (e, _) => Text(
+                'Could not load match details: $e',
+                style: theme.textTheme.bodySmall
+                    ?.copyWith(color: AppColors.error),
+              ),
+              data: (fromMatch) => _MoveSheetMatchBlock(
+                match: fromMatch,
+                prediction: fromPredAsync.valueOrNull,
+                multiplier: multiplier,
+              ),
+            ),
+          ),
+          const SizedBox(height: 20),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => Navigator.of(context).pop(false),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppColors.onSurface,
+                    side: const BorderSide(color: AppColors.outline),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: AppRadii.buttonRadius,
+                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  child: const Text('Keep where it is'),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: FilledButton(
+                  onPressed: () => Navigator.of(context).pop(true),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: AppColors.onPrimary,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: AppRadii.buttonRadius,
+                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                  ),
+                  child: const Text('Move booster'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Renders the FROM match inside [_BoosterMoveConfirmSheet]: team flags +
+/// names + the user's predicted score and (when present) first-team /
+/// scorer picks. Defensive against missing prediction data so the sheet
+/// still renders if the booster row outlived a deletion.
+class _MoveSheetMatchBlock extends StatelessWidget {
+  const _MoveSheetMatchBlock({
+    required this.match,
+    required this.prediction,
+    required this.multiplier,
+  });
+
+  final MatchModel match;
+  final PredictionModel? prediction;
+  final int multiplier;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final pred = prediction;
+    final hasScore =
+        pred?.predictedTeam1 != null && pred?.predictedTeam2 != null;
+    final ftPick = pred?.predictedFirstTeamId;
+    final scorerPick = pred?.predictedScorerId;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // ── Header row: round badge · team flags + names ────────────────
+        Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: AppColors.secondaryContainer.withValues(alpha: 0.4),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Text(
+                '${match.round ?? ''} · ×$multiplier',
+                style: theme.textTheme.labelSmall?.copyWith(
+                  color: AppColors.secondary,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            const Spacer(),
+            const Icon(Icons.bolt, size: 16, color: AppColors.secondary),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Row(
+          children: [
+            TeamFlag(team: match.team1, size: 28),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                match.team1?.name ?? 'TBD',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: AppColors.onSurface,
+                  fontWeight: FontWeight.w600,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            Text(
+              hasScore
+                  ? '${pred!.predictedTeam1}'
+                  : '—',
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: AppColors.onSurface,
+                fontWeight: FontWeight.w800,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            TeamFlag(team: match.team2, size: 28),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                match.team2?.name ?? 'TBD',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: AppColors.onSurface,
+                  fontWeight: FontWeight.w600,
+                ),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            Text(
+              hasScore
+                  ? '${pred!.predictedTeam2}'
+                  : '—',
+              style: theme.textTheme.titleMedium?.copyWith(
+                color: AppColors.onSurface,
+                fontWeight: FontWeight.w800,
+                fontFeatures: const [FontFeature.tabularFigures()],
+              ),
+            ),
+          ],
+        ),
+        // ── Optional pick chips ─────────────────────────────────────────
+        if (ftPick != null || scorerPick != null) ...[
+          const SizedBox(height: 10),
+          const Divider(height: 1, color: AppColors.outlineVariant),
+          const SizedBox(height: 10),
+          if (ftPick != null)
+            _MovePickRow(
+              icon: Icons.flag_outlined,
+              label: 'First to score',
+              value: _resolveTeamName(match, ftPick),
+            ),
+          if (scorerPick != null) ...[
+            if (ftPick != null) const SizedBox(height: 6),
+            _MovePickRow(
+              icon: Icons.sports_soccer_outlined,
+              label: 'Goalscorer',
+              value: abbreviateFullName(_resolveScorerName(match, scorerPick)),
+            ),
+          ],
+        ],
+        if (pred == null) ...[
+          const SizedBox(height: 8),
+          Text(
+            'You haven\'t predicted this match yet — only the booster is at risk.',
+            style: theme.textTheme.bodySmall
+                ?.copyWith(color: AppColors.onSurfaceMuted),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _MovePickRow extends StatelessWidget {
+  const _MovePickRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Row(
+      children: [
+        Icon(icon, size: 14, color: AppColors.onSurfaceVariant),
+        const SizedBox(width: 6),
+        Text(
+          '$label: ',
+          style: theme.textTheme.bodySmall
+              ?.copyWith(color: AppColors.onSurfaceVariant),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: AppColors.onSurface,
+              fontWeight: FontWeight.w600,
+            ),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
     );
   }
 }

@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:material_symbols_icons/material_symbols_icons.dart';
 
 import 'package:wcpredict/core/models/match_model.dart';
+import 'package:wcpredict/core/models/round_booster_model.dart';
 import 'package:wcpredict/core/theme/app_colors.dart';
 import 'package:wcpredict/core/theme/app_radii.dart';
 import 'package:wcpredict/shared/providers/matches_provider.dart';
@@ -13,6 +14,8 @@ import 'package:wcpredict/shared/utils/live_minute.dart';
 import 'package:wcpredict/shared/utils/score_format.dart';
 import 'package:wcpredict/shared/widgets/team_flag.dart';
 import 'package:wcpredict/features/matches/tournament_achievement_banner.dart';
+import 'package:wcpredict/core/scoring_rules.dart';
+import 'package:wcpredict/shared/providers/boosters_provider.dart';
 
 class MatchesListScreen extends ConsumerWidget {
   const MatchesListScreen({super.key});
@@ -59,13 +62,29 @@ class MatchesListScreen extends ConsumerWidget {
             final predictedIds =
                 myPredsAsync.valueOrNull?.map((p) => p.matchId).toSet() ??
                     const <int>{};
+            // Round → matchId for the user's applied boosters. Drives both
+            // the strip below the tournament banner and the green tint on
+            // the affected match card. Watched here once instead of inside
+            // each `_MatchCard` so a single boosters fetch covers the
+            // whole list.
+            final myBoosters = ref.watch(myBoostersProvider).valueOrNull ??
+                const <String, RoundBoosterModel>{};
+            final boostedMatchIds =
+                myBoosters.values.map((b) => b.matchId).toSet();
 
             return ListView.builder(
               padding: const EdgeInsets.only(top: 8, bottom: 16),
-              itemCount: items.length + 1,
+              // +1 for the achievement banner, +1 for the boosters strip
+              itemCount: items.length + 2,
               itemBuilder: (ctx, i) {
                 if (i == 0) return const TournamentAchievementBanner();
-                final item = items[i - 1];
+                if (i == 1) {
+                  return _RoundBoostersStrip(
+                    matches: matches,
+                    boostersByRound: myBoosters,
+                  );
+                }
+                final item = items[i - 2];
                 if (item is _SectionHeader) {
                   return _RoundHeader(section: item);
                 }
@@ -74,6 +93,7 @@ class MatchesListScreen extends ConsumerWidget {
                   key: ValueKey(m.id),
                   match: m,
                   isPredicted: predictedIds.contains(m.id),
+                  isBoosted: boostedMatchIds.contains(m.id),
                 );
               },
             );
@@ -346,35 +366,67 @@ class _MatchCard extends StatelessWidget {
     super.key,
     required this.match,
     required this.isPredicted,
+    required this.isBoosted,
   });
 
   final MatchModel match;
   final bool isPredicted;
+  final bool isBoosted;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
+    // Boosted cards get a tinted background + a soft green stroke so a
+    // glance at the list shows the user where their multiplier sits.
+    // We keep the existing live-ticker subtree intact; only the outer
+    // surface chrome reacts to `isBoosted`.
+    final cardColor = isBoosted
+        ? AppColors.primaryContainer.withValues(alpha: 0.25)
+        : AppColors.surfaceHigh;
+    final cardBorder = isBoosted
+        ? Border.all(
+            color: AppColors.primary.withValues(alpha: 0.45),
+            width: 1.5,
+          )
+        : null;
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
       child: Material(
-        color: AppColors.surfaceHigh,
+        color: Colors.transparent,
         borderRadius: AppRadii.cardRadius,
         clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: () => context.push('/matches/${match.id}'),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-            child: Row(
-              children: [
-                _LiveTimeColumn(match: match),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: _LiveTeamsBlock(match: match, theme: theme),
-                ),
-                const SizedBox(width: 10),
-                _LiveAction(match: match, isPredicted: isPredicted),
-              ],
+        child: Ink(
+          decoration: BoxDecoration(
+            color: cardColor,
+            borderRadius: AppRadii.cardRadius,
+            border: cardBorder,
+          ),
+          child: InkWell(
+            onTap: () => context.push('/matches/${match.id}'),
+            child: Padding(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+              child: Row(
+                children: [
+                  _LiveTimeColumn(match: match),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: _LiveTeamsBlock(match: match, theme: theme),
+                  ),
+                  if (isBoosted) ...[
+                    const SizedBox(width: 6),
+                    Icon(
+                      Icons.bolt,
+                      size: 18,
+                      color: AppColors.primary.withValues(alpha: 0.9),
+                    ),
+                  ],
+                  const SizedBox(width: 10),
+                  _LiveAction(match: match, isPredicted: isPredicted),
+                ],
+              ),
             ),
           ),
         ),
@@ -737,4 +789,195 @@ String _finalScoreLabel(MatchModel m) {
     return '(et) ${formatScore(m.scoreEtTeam1, m.scoreEtTeam2)}';
   }
   return formatScore(m.scoreFtTeam1, m.scoreFtTeam2);
+}
+
+// ---------------------------------------------------------------------------
+// Active-round booster card — pinned beneath the tournament banner.
+//
+// Shows ONE card for the round the user can act on right now. The active
+// round is the earliest knockout round where:
+//   1. The previous bracket stage has fully finalised (so the bracket is
+//      filled in and team names are real, not TBD placeholders), and
+//   2. At least one match in this round is still pre-kickoff (so the
+//      booster can still be applied or moved before the lock trigger
+//      fires DB-side).
+//
+// Until R32 starts the card is hidden — knockout teams aren't determined
+// until the group stage is final. Once R16 starts the R32 card retires
+// (no more boosters can land there) and R16 takes its place. The Final
+// and 3rd-place rounds use auto-multipliers, so we never surface a
+// booster card for them.
+// ---------------------------------------------------------------------------
+
+/// Returns the round the booster card should surface, or null when no
+/// round is actionable. Pure — exported only via this file's private
+/// scope, but kept top-level so unit tests can target it directly later.
+String? _activeBoosterRound(List<MatchModel> matches) {
+  const knockoutOrder = ['R32', 'R16', 'QF', 'SF'];
+  for (var i = 0; i < knockoutOrder.length; i++) {
+    final round = knockoutOrder[i];
+    final roundMatches = matches.where((m) => m.round == round).toList();
+    if (roundMatches.isEmpty) continue;
+
+    // Previous stage must have fully finalised so the bracket teams are
+    // real. R32's gate is the group stage; later rounds gate on the
+    // previous knockout round.
+    final prevRoundFinal = i == 0
+        ? _allGroupStageFinal(matches)
+        : matches
+            .where((m) => m.round == knockoutOrder[i - 1])
+            .every((m) => m.status == 'final');
+    if (!prevRoundFinal) continue;
+
+    // At least one match in THIS round must still be pre-kickoff.
+    final hasUnlocked = roundMatches.any((m) => !m.isLocked);
+    if (!hasUnlocked) continue;
+
+    return round;
+  }
+  return null;
+}
+
+bool _allGroupStageFinal(List<MatchModel> matches) {
+  final group = matches.where((m) {
+    final r = m.round ?? '';
+    return r.startsWith('Matchday') || r == 'Group Stage';
+  }).toList();
+  if (group.isEmpty) return false;
+  return group.every((m) => m.status == 'final');
+}
+
+class _RoundBoostersStrip extends StatelessWidget {
+  const _RoundBoostersStrip({
+    required this.matches,
+    required this.boostersByRound,
+  });
+
+  final List<MatchModel> matches;
+  final Map<String, RoundBoosterModel> boostersByRound;
+
+  @override
+  Widget build(BuildContext context) {
+    final round = _activeBoosterRound(matches);
+    if (round == null) return const SizedBox.shrink();
+
+    final multiplier = kBoosterMultipliers[round]!;
+    final booster = boostersByRound[round];
+    final appliedMatch = booster == null
+        ? null
+        : matches.cast<MatchModel?>().firstWhere(
+              (m) => m?.id == booster.matchId,
+              orElse: () => null,
+            );
+    final applied = appliedMatch != null;
+    final theme = Theme.of(context);
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: applied
+              ? () => context.push('/matches/${appliedMatch.id}')
+              : null,
+          borderRadius: AppRadii.cardRadius,
+          child: Ink(
+            decoration: BoxDecoration(
+              color: applied
+                  ? AppColors.primaryContainer.withValues(alpha: 0.25)
+                  : AppColors.surfaceHigh,
+              borderRadius: AppRadii.cardRadius,
+              border: Border.all(
+                color: applied
+                    ? AppColors.primary.withValues(alpha: 0.45)
+                    : AppColors.outline,
+                width: applied ? 1.5 : 1,
+              ),
+            ),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 14, 14),
+              child: Row(
+                children: [
+                  // Round + multiplier badge
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: applied
+                          ? AppColors.primary.withValues(alpha: 0.18)
+                          : AppColors.surfaceHighest,
+                      borderRadius: BorderRadius.circular(999),
+                      border: Border.all(
+                        color: applied
+                            ? AppColors.primary.withValues(alpha: 0.6)
+                            : AppColors.outlineVariant,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.bolt,
+                          size: 14,
+                          color: applied
+                              ? AppColors.primary
+                              : AppColors.onSurfaceVariant,
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          '$round ×$multiplier',
+                          style: theme.textTheme.labelMedium?.copyWith(
+                            color: applied
+                                ? AppColors.primary
+                                : AppColors.onSurface,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          applied
+                              ? '${appliedMatch.team1?.code ?? '???'} vs ${appliedMatch.team2?.code ?? '???'}'
+                              : 'No match boosted yet',
+                          style: theme.textTheme.titleSmall?.copyWith(
+                            color: AppColors.onSurface,
+                            fontWeight: FontWeight.w700,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          applied
+                              ? 'Booster applied · tap to open the match'
+                              : 'Tap a $round match to apply this round\'s booster',
+                          style: theme.textTheme.bodySmall?.copyWith(
+                            color: AppColors.onSurfaceMuted,
+                          ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (applied)
+                    const Icon(
+                      Icons.chevron_right,
+                      size: 20,
+                      color: AppColors.onSurfaceMuted,
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
