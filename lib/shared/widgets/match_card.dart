@@ -6,6 +6,7 @@ import 'package:wcpredict/core/theme/app_colors.dart';
 import 'package:wcpredict/core/theme/app_radii.dart';
 import 'package:wcpredict/shared/widgets/team_flag.dart';
 import 'package:wcpredict/shared/utils/score_format.dart';
+import 'package:wcpredict/shared/utils/date_format.dart';
 
 class MatchCard extends StatelessWidget {
   const MatchCard({
@@ -168,7 +169,7 @@ class _CentreScore extends StatelessWidget {
         local.month == now.month &&
         local.day == now.day;
     if (isToday) return DateFormat('HH:mm').format(local);
-    return DateFormat('d MMM · HH:mm').format(local);
+    return formatMatchKickoffCompact(kickoff);
   }
 }
 

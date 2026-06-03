@@ -30,6 +30,7 @@ import 'package:wcpredict/shared/widgets/countdown_pill.dart';
 import 'package:wcpredict/shared/providers/boosters_provider.dart';
 import 'package:wcpredict/shared/widgets/app_sheet.dart';
 import 'package:wcpredict/shared/widgets/app_feedback.dart';
+import 'package:wcpredict/shared/utils/date_format.dart';
 
 // ---------------------------------------------------------------------------
 // Screen
@@ -620,9 +621,8 @@ class _MatchInfoCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final kickoff = match.kickoffTime;
-    final dateStr = kickoff != null
-        ? DateFormat('EEEE d MMMM yyyy · HH:mm').format(kickoff.toLocal())
-        : null;
+    final dateStr =
+        kickoff != null ? formatMatchKickoffVerbose(kickoff) : null;
 
     final rows = <(IconData, String)>[
       if (match.round != null) (Symbols.emoji_events, match.round!),

@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:intl/intl.dart';
 
 import 'package:material_symbols_icons/symbols.dart';
 
@@ -14,6 +13,7 @@ import 'package:wcpredict/shared/providers/groups_provider.dart';
 import 'package:wcpredict/shared/providers/auth_provider.dart';
 import 'package:wcpredict/shared/widgets/team_flag.dart';
 import 'package:wcpredict/shared/utils/score_format.dart';
+import 'package:wcpredict/shared/utils/date_format.dart';
 
 // ---------------------------------------------------------------------------
 
@@ -463,9 +463,8 @@ class _MatchHeader extends StatelessWidget {
     final t1 = match.team1;
     final t2 = match.team2;
     final kickoff = match.kickoffTime;
-    final dateStr = kickoff != null
-        ? DateFormat('d MMM · HH:mm').format(kickoff.toLocal())
-        : '';
+    final dateStr =
+        kickoff != null ? formatMatchKickoffCompact(kickoff) : '';
 
     return Row(
       children: [

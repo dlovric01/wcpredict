@@ -14,6 +14,7 @@ import 'package:wcpredict/shared/providers/tournament_provider.dart';
 import 'package:wcpredict/features/rules/rules_screen.dart';
 import 'package:wcpredict/shared/widgets/app_sheet.dart';
 import 'package:wcpredict/shared/widgets/app_feedback.dart';
+import 'package:wcpredict/shared/utils/date_format.dart';
 
 /// World Cup winner (+75) and Golden Boot (+50) bonus picks. Submitted any
 /// time before the opening match; locked thereafter by the DB trigger.
@@ -234,7 +235,7 @@ class _HeaderCard extends StatelessWidget {
       ));
       if (opening != null) {
         rows.add(Text(
-          'Opening match: ${opening!.toLocal()}',
+          'Opening match: ${formatLockDeadline(opening!)}',
           style: theme.textTheme.bodySmall
               ?.copyWith(color: AppColors.onSurfaceMuted),
         ));
@@ -247,7 +248,7 @@ class _HeaderCard extends StatelessWidget {
       ));
       if (opening != null) {
         rows.add(Text(
-          'Locks at ${opening!.toLocal()}',
+          'Locks at ${formatLockDeadline(opening!)}',
           style: theme.textTheme.bodySmall
               ?.copyWith(color: AppColors.onSurfaceMuted),
         ));

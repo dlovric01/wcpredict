@@ -2,7 +2,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:intl/intl.dart';
+import 'package:wcpredict/shared/utils/date_format.dart';
 
 import 'package:wcpredict/core/theme/app_colors.dart';
 import 'package:wcpredict/core/theme/app_radii.dart';
@@ -122,7 +122,7 @@ class TournamentAchievementBanner extends ConsumerWidget {
     // ── State 2: open, picks already submitted ──────────────────────────────
     if (hasPicks) {
       final lockText = opening != null
-          ? 'Locks ${DateFormat.MMMd().add_jm().format(opening.toLocal())}'
+          ? 'Locks ${formatLockDeadline(opening)}'
           : 'Tap to edit before kickoff';
       return _BannerCard(
         accent: AppColors.primary,
@@ -154,7 +154,7 @@ class TournamentAchievementBanner extends ConsumerWidget {
 
     // ── State 1: open, no picks yet → big CTA ───────────────────────────────
     final lockText = opening != null
-        ? 'Closes ${DateFormat.MMMd().add_jm().format(opening.toLocal())}'
+        ? 'Closes ${formatLockDeadline(opening)}'
         : 'Closes at the opening match';
     return _CtaBanner(
       lockText: lockText,
