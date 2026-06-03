@@ -929,8 +929,8 @@ describe("Scoring Engine", () => {
     expect(row?.points_goalscorer).toBe(8);
     expect(row?.points_earned).toBe(13);
 
-    // VAR: remove BOTH PLAYER_A1 goals. The `match_event_deleted` trigger
-    // re-runs compute_match_scoring for the match.
+    // VAR: remove BOTH PLAYER_A1 goals. The `match_events_recompute_scoring`
+    // trigger (mig 037) re-runs compute_match_scoring for the match.
     await admin
       .from("match_events")
       .delete()
@@ -983,6 +983,121 @@ describe("Scoring Engine", () => {
       .eq("user_id", alice.userId)
       .single();
     expect(data?.points_first_team).toBe(0);
+  });
+
+  // ── Production-ordering / VAR-refresh regression ────────────────────────────
+  //
+  // poll_live_matches Phase B refreshes events via delete-then-insert. The
+  // legacy migration-001 trigger fired only on DELETE while status='final',
+  // so a refresh that happened after the status flip would zero scoring
+  // (the per-row delete trigger recomputed against a shrinking event set,
+  // ending at zero; the subsequent insert had no trigger to restore it).
+  // Migration 037 also fires on INSERT, so the last write in any
+  // delete-then-insert refresh re-arms scoring with the fresh event set.
+  //
+  // This test runs the exact destructive sequence end-to-end:
+  //   1. predictions while kickoff is future            (lock trigger ok)
+  //   2. flip to live + insert events                   (Phase A)
+  //   3. flip to final with FT scores                   (Phase B step 1)
+  //   4. delete-then-insert the same events post-final  (Phase B refresh)
+  //   5. delete a single goal post-final                (VAR-disallow path)
+  //
+  // Without migration 037 step 4 wipes both bonuses to 0. With it, scoring
+  // survives the refresh AND the VAR path still correctly recomputes.
+  test("delete-then-insert events post-final preserves bonuses (mig 037)", async () => {
+    // ── 1. Clean slate + predictions with future kickoff ─────────────────
+    await admin.from("predictions").delete().eq("match_id", T.MATCH_SCORING);
+    await admin.from("match_events").delete().eq("match_id", T.MATCH_SCORING);
+    await admin
+      .from("matches")
+      .update({
+        status: "scheduled",
+        score_ft_team1: null,
+        score_ft_team2: null,
+        kickoff_time: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(),
+      })
+      .eq("id", T.MATCH_SCORING);
+
+    await admin.from("predictions").insert({
+      user_id: alice.userId,
+      match_id: T.MATCH_SCORING,
+      predicted_team1: 2,
+      predicted_team2: 1,
+      predicted_first_team_id: T.TEAM_A,   // TEAM_A scores first → 2 pts
+      predicted_scorer_id: T.PLAYER_A1,    // PLAYER_A1 scores    → 8 pts
+    });
+
+    // ── 2. Move kickoff to the past + simulate Phase A (live + events) ───
+    await admin
+      .from("matches")
+      .update({
+        kickoff_time: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+        status: "live",
+      })
+      .eq("id", T.MATCH_SCORING);
+
+    const events = [
+      { match_id: T.MATCH_SCORING, minute: 15, type: "goal", team_id: T.TEAM_A,
+        player_id: T.PLAYER_A1, player_name: "Alpha Striker", detail: null },
+      { match_id: T.MATCH_SCORING, minute: 60, type: "goal", team_id: T.TEAM_B,
+        player_id: T.PLAYER_B1, player_name: "Beta Forward", detail: null },
+      { match_id: T.MATCH_SCORING, minute: 80, type: "goal", team_id: T.TEAM_A,
+        player_id: T.PLAYER_A1, player_name: "Alpha Striker", detail: null },
+    ];
+    await admin.from("match_events").insert(events);
+
+    // ── 3. Phase B step 1: flip to final → trigger scoring once ──────────
+    await admin
+      .from("matches")
+      .update({ status: "final", score_ft_team1: 2, score_ft_team2: 1 })
+      .eq("id", T.MATCH_SCORING);
+    await sleep(2000);
+
+    const { data: midRow } = await admin
+      .from("predictions")
+      .select("points_match, points_first_team, points_goalscorer, points_earned")
+      .eq("match_id", T.MATCH_SCORING)
+      .eq("user_id", alice.userId)
+      .single();
+    expect(midRow?.points_match).toBe(5);
+    expect(midRow?.points_first_team).toBe(2);
+    expect(midRow?.points_goalscorer).toBe(8);
+    expect(midRow?.points_earned).toBe(15);
+
+    // ── 4. Post-final delete-then-insert refresh — the dangerous path ────
+    await admin.from("match_events").delete().eq("match_id", T.MATCH_SCORING);
+    await admin.from("match_events").insert(events);
+    await sleep(2000);
+
+    const { data: postRow } = await admin
+      .from("predictions")
+      .select("points_match, points_first_team, points_goalscorer, points_earned")
+      .eq("match_id", T.MATCH_SCORING)
+      .eq("user_id", alice.userId)
+      .single();
+    expect(postRow?.points_match).toBe(5);
+    expect(postRow?.points_first_team).toBe(2);   // would be 0 without mig 037
+    expect(postRow?.points_goalscorer).toBe(8);   // would be 0 without mig 037
+    expect(postRow?.points_earned).toBe(15);
+
+    // ── 5. VAR-disallow path: bare DELETE recomputes against new event set ─
+    // Drop the 15' goal so TEAM_B (60') becomes the first to score and
+    // PLAYER_A1's earliest credited goal is now 80' (still counts).
+    await admin
+      .from("match_events")
+      .delete()
+      .eq("match_id", T.MATCH_SCORING)
+      .eq("minute", 15);
+    await sleep(2000);
+
+    const { data: varRow } = await admin
+      .from("predictions")
+      .select("points_first_team, points_goalscorer")
+      .eq("match_id", T.MATCH_SCORING)
+      .eq("user_id", alice.userId)
+      .single();
+    expect(varRow?.points_first_team).toBe(0);    // TEAM_B scored first now
+    expect(varRow?.points_goalscorer).toBe(8);    // PLAYER_A1 still on 80'
   });
 });
 
@@ -1249,6 +1364,255 @@ describe("Knockout Boosters", () => {
       multiplier: 4,
     });
     expect(error).not.toBeNull(); // check_violation: match round must equal booster round
+  });
+
+  // ── Move booster between matches in the same round ─────────────────────────
+  // Mirrors the UX of `_BoosterMoveConfirmSheet`: applying a booster to a
+  // second match in the same round replaces the row via upsert on
+  // `(user_id, round)`. The old match must no longer be boosted; the new
+  // match must.
+  test("upsert moves booster to a new match in the same round", async () => {
+    await admin
+      .from("round_boosters")
+      .delete()
+      .eq("user_id", alice.userId)
+      .eq("round", "QF");
+    // MATCH_ET ships with a past kickoff (used by ET / pens tests). Move
+    // it forward so the lock trigger doesn't reject the second upsert
+    // before we exercise the conflict resolution.
+    const future = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    await admin
+      .from("matches")
+      .update({ kickoff_time: future })
+      .eq("id", T.MATCH_ET);
+
+    // Step 1: apply to MATCH_KO
+    await alice.client.from("round_boosters").upsert(
+      {
+        user_id: alice.userId,
+        round: "QF",
+        match_id: T.MATCH_KO,
+        multiplier: 4,
+      },
+      { onConflict: "user_id,round" }
+    );
+
+    // Step 2: re-upsert to MATCH_ET (also QF) — should replace, not duplicate
+    const { error } = await alice.client.from("round_boosters").upsert(
+      {
+        user_id: alice.userId,
+        round: "QF",
+        match_id: T.MATCH_ET,
+        multiplier: 4,
+      },
+      { onConflict: "user_id,round" }
+    );
+    expect(error).toBeNull();
+
+    const { data: rows } = await admin
+      .from("round_boosters")
+      .select("match_id")
+      .eq("user_id", alice.userId)
+      .eq("round", "QF");
+    expect(rows).toHaveLength(1);
+    expect(rows![0].match_id).toBe(T.MATCH_ET);
+
+    // Cleanup — drop the booster and restore MATCH_ET's past kickoff so
+    // the ET / pens tests still see their expected fixture state.
+    await admin
+      .from("round_boosters")
+      .delete()
+      .eq("user_id", alice.userId)
+      .eq("round", "QF");
+    const past = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    await admin
+      .from("matches")
+      .update({ kickoff_time: past })
+      .eq("id", T.MATCH_ET);
+  });
+
+  // ── Lock trigger rejects writes after kickoff ──────────────────────────────
+  // Mirrors `check_booster_lock` from migration 012. Once the match has
+  // kicked off (status flipped to 'live' OR kickoff_time has passed), the
+  // trigger MUST reject both new applications and updates so a user can't
+  // backdate a booster onto a match that already started.
+  test("booster insert is rejected after the match has kicked off", async () => {
+    await admin
+      .from("round_boosters")
+      .delete()
+      .eq("user_id", alice.userId)
+      .eq("round", "QF");
+    // Move kickoff into the past so the wall-clock branch of the lock
+    // trigger fires regardless of status.
+    const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    await admin
+      .from("matches")
+      .update({ kickoff_time: past })
+      .eq("id", T.MATCH_KO);
+
+    const { error } = await alice.client.from("round_boosters").insert({
+      user_id: alice.userId,
+      round: "QF",
+      match_id: T.MATCH_KO,
+      multiplier: 4,
+    });
+    expect(error).not.toBeNull();
+    expect(error?.message).toMatch(/booster cannot be applied|locked/i);
+
+    // Restore so later tests find a future-kickoff QF match.
+    const future = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    await admin
+      .from("matches")
+      .update({ kickoff_time: future })
+      .eq("id", T.MATCH_KO);
+  });
+
+  test("booster update is rejected after the match has kicked off", async () => {
+    await admin
+      .from("round_boosters")
+      .delete()
+      .eq("user_id", alice.userId)
+      .eq("round", "QF");
+    // Insert while still scheduled
+    await admin.from("round_boosters").insert({
+      user_id: alice.userId,
+      round: "QF",
+      match_id: T.MATCH_KO,
+      multiplier: 4,
+    });
+    // Flip kickoff into the past
+    const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    await admin
+      .from("matches")
+      .update({ kickoff_time: past })
+      .eq("id", T.MATCH_KO);
+
+    // The UI sends an update of `multiplier` to keep the booster row in
+    // sync with the round; the trigger MUST reject because the match is
+    // past its window now.
+    const { error } = await alice.client
+      .from("round_boosters")
+      .update({ multiplier: 4 })
+      .eq("user_id", alice.userId)
+      .eq("round", "QF");
+    expect(error).not.toBeNull();
+
+    // Restore + cleanup
+    const future = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    await admin
+      .from("matches")
+      .update({ kickoff_time: future })
+      .eq("id", T.MATCH_KO);
+    await admin
+      .from("round_boosters")
+      .delete()
+      .eq("user_id", alice.userId)
+      .eq("round", "QF");
+  });
+
+  // ── Multiplier value constraint ────────────────────────────────────────────
+  // Mig 012 hard-codes the round → multiplier mapping (R32×2, R16×3,
+  // QF×4, SF×5). A POST with the wrong multiplier for a given round MUST
+  // be rejected by the check constraint, even via the admin client.
+  test("booster rejected when multiplier doesn't match round", async () => {
+    await admin
+      .from("round_boosters")
+      .delete()
+      .eq("user_id", alice.userId)
+      .eq("round", "QF");
+    // QF should be 4, not 5
+    const { error } = await alice.client.from("round_boosters").insert({
+      user_id: alice.userId,
+      round: "QF",
+      match_id: T.MATCH_KO,
+      multiplier: 5,
+    });
+    expect(error).not.toBeNull();
+  });
+
+  // ── Cross-user isolation ───────────────────────────────────────────────────
+  // Alice applying a booster MUST not affect Bob's scoring on the same
+  // match. Confirms the multiplier subquery in `compute_match_scoring()`
+  // correctly scopes by `rb.user_id = pr.user_id`.
+  test("booster applies per-user — other users keep multiplier 1", async () => {
+    await admin.from("predictions").delete().eq("match_id", T.MATCH_KO);
+    await admin.from("match_events").delete().eq("match_id", T.MATCH_KO);
+    await admin
+      .from("matches")
+      .update({
+        status: "scheduled",
+        score_ft_team1: null,
+        score_ft_team2: null,
+      })
+      .eq("id", T.MATCH_KO);
+    await admin
+      .from("round_boosters")
+      .delete()
+      .eq("user_id", alice.userId)
+      .eq("round", "QF");
+    await admin
+      .from("round_boosters")
+      .delete()
+      .eq("user_id", bob.userId)
+      .eq("round", "QF");
+
+    // Alice applies booster, both predict exact 2-1
+    await admin.from("round_boosters").insert({
+      user_id: alice.userId,
+      round: "QF",
+      match_id: T.MATCH_KO,
+      multiplier: 4,
+    });
+    await admin.from("predictions").insert([
+      {
+        user_id: alice.userId,
+        match_id: T.MATCH_KO,
+        predicted_team1: 2,
+        predicted_team2: 1,
+      },
+      {
+        user_id: bob.userId,
+        match_id: T.MATCH_KO,
+        predicted_team1: 2,
+        predicted_team2: 1,
+      },
+    ]);
+    await admin
+      .from("matches")
+      .update({
+        status: "final",
+        score_ft_team1: 2,
+        score_ft_team2: 1,
+      })
+      .eq("id", T.MATCH_KO);
+    await sleep(3000);
+
+    const { data: rows } = await admin
+      .from("predictions")
+      .select("user_id, multiplier, points_earned")
+      .eq("match_id", T.MATCH_KO);
+    const aliceRow = rows!.find((r) => r.user_id === alice.userId);
+    const bobRow = rows!.find((r) => r.user_id === bob.userId);
+    expect(aliceRow?.multiplier).toBe(4);
+    expect(aliceRow?.points_earned).toBe(20); // exact 5 × 4
+    expect(bobRow?.multiplier).toBe(1);
+    expect(bobRow?.points_earned).toBe(5); // exact 5 × 1
+
+    // Cleanup
+    await admin
+      .from("round_boosters")
+      .delete()
+      .eq("user_id", alice.userId)
+      .eq("round", "QF");
+    await admin.from("predictions").delete().eq("match_id", T.MATCH_KO);
+    await admin
+      .from("matches")
+      .update({
+        status: "scheduled",
+        score_ft_team1: null,
+        score_ft_team2: null,
+      })
+      .eq("id", T.MATCH_KO);
   });
 });
 
