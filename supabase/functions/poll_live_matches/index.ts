@@ -43,11 +43,29 @@ function mapEventDetail(type: string, detail: string): string | null {
   return null;
 }
 
-async function upsertEvents(matchId: number, key: string): Promise<number> {
+// Refresh stored match_events for `matchId` from the api-sports.io events
+// endpoint.
+//
+//   { ok: true,  inserted: N }  — events fetched + persisted (N may be 0
+//                                 for a clean 0-0 with no cards/subs)
+//   { ok: false, inserted: 0 }  — API fetch or DB insert failed; caller
+//                                 MUST treat this as transient and retry
+//                                 on the next cron tick
+//
+// `ok` exists specifically so finalisation can refuse to flip a match to
+// `final` when the events fetch failed. Setting `status='final'` fires
+// `trigger_compute_scoring()`, which uses the (now-stale or empty) events
+// to award the goalscorer and first-team bonuses. Finalising blindly
+// would lock in 0 bonuses with no self-healing path (the match is no
+// longer in this function's `activeMatches` filter).
+async function upsertEvents(
+  matchId: number,
+  key: string,
+): Promise<{ ok: boolean; inserted: number }> {
   const res = await fetch(`${BASE}/fixtures/events?fixture=${matchId}`, {
     headers: { 'x-apisports-key': key },
   });
-  if (!res.ok) return 0;
+  if (!res.ok) return { ok: false, inserted: 0 };
   const json = await res.json();
   const apiEvents = (json.response ?? []) as any[];
 
@@ -70,12 +88,20 @@ async function upsertEvents(matchId: number, key: string): Promise<number> {
       detail: mapEventDetail(e.type, e.detail ?? ''),
     }));
 
-  if (rows.length === 0) return 0;
+  if (rows.length === 0) {
+    // Legit empty event list (e.g. 0-0 with no cards). Clear any stale
+    // rows from a previous poll so the timeline reflects API truth.
+    const { error: delErr } = await supabaseAdmin
+      .from('match_events')
+      .delete()
+      .eq('match_id', matchId);
+    return { ok: !delErr, inserted: 0 };
+  }
 
   // Delete then re-insert for idempotency — keeps event order stable.
   await supabaseAdmin.from('match_events').delete().eq('match_id', matchId);
   const { error } = await supabaseAdmin.from('match_events').insert(rows);
-  return error ? 0 : rows.length;
+  return { ok: !error, inserted: error ? 0 : rows.length };
 }
 
 Deno.serve(async (req) => {
@@ -143,7 +169,11 @@ Deno.serve(async (req) => {
         if (!error) {
           liveUpdated++;
           // Fetch events so the timeline stays current during the match.
-          eventsInserted += await upsertEvents(match.id, key);
+          // Safe to refresh here: the per-row `match_event_deleted` trigger
+          // short-circuits on `status='live'`, so the delete-then-insert
+          // inside upsertEvents does not bounce scoring.
+          const ev = await upsertEvents(match.id, key);
+          eventsInserted += ev.inserted;
         }
       }
     }
@@ -169,6 +199,31 @@ Deno.serve(async (req) => {
           if (!f) continue;
           if (match.status === 'final') continue; // already done
 
+          // ── Ordering matters ───────────────────────────────────────────────
+          // We MUST refresh events BEFORE flipping `status` to 'final'.
+          //
+          // Setting `status='final'` fires `trigger_compute_scoring()` which
+          // awards points_first_team and points_goalscorer from match_events.
+          // The legacy migration-001 `match_event_deleted` trigger then fires
+          // per-row on the delete-half of upsertEvents and recomputes against
+          // a progressively shrinking event set. If upsertEvents ran *after*
+          // the status flip, the final recompute would land at 0 events ⇒
+          // every prediction permanently loses its first-team + goalscorer
+          // bonuses, with no path to self-heal (status='final' excludes the
+          // match from later poll cycles).
+          //
+          // Refreshing first keeps the destructive delete inside the
+          // 'scheduled'/'live' window where the per-row trigger is a no-op,
+          // and the subsequent status flip runs scoring exactly once against
+          // the authoritative event list.
+          const ev = await upsertEvents(match.id, key);
+          if (!ev.ok) {
+            // Events fetch/insert failed — leave the match in its current
+            // pre-final state so the next cron tick retries the whole flip.
+            continue;
+          }
+          eventsInserted += ev.inserted;
+
           const { error } = await supabaseAdmin
             .from('matches')
             .update({
@@ -193,10 +248,7 @@ Deno.serve(async (req) => {
             })
             .eq('id', match.id);
 
-          if (!error) {
-            finalized++;
-            eventsInserted += await upsertEvents(match.id, key);
-          }
+          if (!error) finalized++;
         }
       }
     }
