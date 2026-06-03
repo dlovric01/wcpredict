@@ -17,12 +17,32 @@ import 'package:wcpredict/features/matches/tournament_achievement_banner.dart';
 import 'package:wcpredict/core/scoring_rules.dart';
 import 'package:wcpredict/shared/providers/boosters_provider.dart';
 import 'package:wcpredict/features/matches/booster_logic.dart';
+import 'package:wcpredict/features/matches/matches_filter.dart';
 
-class MatchesListScreen extends ConsumerWidget {
+class MatchesListScreen extends ConsumerStatefulWidget {
   const MatchesListScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<MatchesListScreen> createState() =>
+      _MatchesListScreenState();
+}
+
+class _MatchesListScreenState extends ConsumerState<MatchesListScreen> {
+  /// `null` ⇒ the ALL chip is selected (no filter).
+  /// `non-null` ⇒ local midnight of the selected day; matches are filtered
+  /// to that calendar date via `filterMatchesByDay`.
+  late DateTime? _selectedDay;
+
+  @override
+  void initState() {
+    super.initState();
+    // Default to today so the list opens on "what's playing right now".
+    final now = DateTime.now();
+    _selectedDay = DateTime(now.year, now.month, now.day);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final matchesAsync = ref.watch(allMatchesProvider);
     final myPredsAsync = ref.watch(myAllPredictionsProvider);
 
@@ -47,11 +67,9 @@ class MatchesListScreen extends ConsumerWidget {
           ref.invalidate(myAllPredictionsProvider);
         },
         child: matchesAsync.when(
-          // The list itself never refetches on score/status changes —
-          // those propagate through `liveMatchProvider` per-card. We
-          // still keep skipLoadingOnReload for pull-to-refresh.
           skipLoadingOnReload: true,
-          loading: () => const Center(child: CircularProgressIndicator()),
+          loading: () =>
+              const Center(child: CircularProgressIndicator()),
           error: (e, _) => Center(
             child: Text(
               'Error: $e',
@@ -59,44 +77,66 @@ class MatchesListScreen extends ConsumerWidget {
             ),
           ),
           data: (matches) {
-            final items = _buildItems(matches);
+            final filtered = filterMatchesByDay(matches, _selectedDay);
+            final items = _buildItems(filtered);
             final predictedIds =
                 myPredsAsync.valueOrNull?.map((p) => p.matchId).toSet() ??
                     const <int>{};
-            // Round → matchId for the user's applied boosters. Drives both
-            // the strip below the tournament banner and the green tint on
-            // the affected match card. Watched here once instead of inside
-            // each `_MatchCard` so a single boosters fetch covers the
-            // whole list.
-            final myBoosters = ref.watch(myBoostersProvider).valueOrNull ??
-                const <String, RoundBoosterModel>{};
+            // Round → matchId for the user's applied boosters. Drives
+            // both the strip and the green tint on the affected card.
+            final myBoosters =
+                ref.watch(myBoostersProvider).valueOrNull ??
+                    const <String, RoundBoosterModel>{};
             final boostedMatchIds =
                 myBoosters.values.map((b) => b.matchId).toSet();
 
-            return ListView.builder(
-              padding: const EdgeInsets.only(top: 8, bottom: 16),
-              // +1 for the achievement banner, +1 for the boosters strip
-              itemCount: items.length + 2,
-              itemBuilder: (ctx, i) {
-                if (i == 0) return const TournamentAchievementBanner();
-                if (i == 1) {
-                  return _RoundBoostersStrip(
+            return CustomScrollView(
+              slivers: [
+                SliverToBoxAdapter(
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: const TournamentAchievementBanner(),
+                  ),
+                ),
+                SliverToBoxAdapter(
+                  child: _RoundBoostersStrip(
                     matches: matches,
                     boostersByRound: myBoosters,
-                  );
-                }
-                final item = items[i - 2];
-                if (item is _SectionHeader) {
-                  return _RoundHeader(section: item);
-                }
-                final m = item as MatchModel;
-                return _MatchCard(
-                  key: ValueKey(m.id),
-                  match: m,
-                  isPredicted: predictedIds.contains(m.id),
-                  isBoosted: boostedMatchIds.contains(m.id),
-                );
-              },
+                  ),
+                ),
+                SliverPersistentHeader(
+                  pinned: true,
+                  delegate: _DayFilterBarDelegate(
+                    today: DateTime.now(),
+                    selectedDay: _selectedDay,
+                    onSelect: (day) =>
+                        setState(() => _selectedDay = day),
+                  ),
+                ),
+                if (items.isEmpty)
+                  SliverFillRemaining(
+                    hasScrollBody: false,
+                    child: _DayEmptyState(day: _selectedDay),
+                  )
+                else
+                  SliverList.builder(
+                    itemCount: items.length,
+                    itemBuilder: (ctx, i) {
+                      final item = items[i];
+                      if (item is _SectionHeader) {
+                        return _RoundHeader(section: item);
+                      }
+                      final m = item as MatchModel;
+                      return _MatchCard(
+                        key: ValueKey(m.id),
+                        match: m,
+                        isPredicted: predictedIds.contains(m.id),
+                        isBoosted: boostedMatchIds.contains(m.id),
+                      );
+                    },
+                  ),
+                const SliverToBoxAdapter(child: SizedBox(height: 16)),
+              ],
             );
           },
         ),
@@ -104,8 +144,9 @@ class MatchesListScreen extends ConsumerWidget {
     );
   }
 
-  /// Builds a flat list of section headers + matches. Each `_SectionHeader`
-  /// summarises a round (count + date range) and is followed by its matches.
+  /// Builds a flat list of section headers + matches. Each
+  /// `_SectionHeader` summarises a round (count + date range) and is
+  /// followed by its matches.
   List<Object> _buildItems(List<MatchModel> matches) {
     final grouped = <String, List<MatchModel>>{};
     final order = <String>[];
@@ -989,6 +1030,345 @@ class _RoundBoostersStrip extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Sticky day-filter chip bar
+//
+// Surfaces 7 day chips (today centered + 3 days each side) plus an ALL
+// chip that clears the filter. Pinned via SliverPersistentHeader so the
+// banner + booster strip scroll away above it but the chip bar stays
+// glued under the AppBar while the matches list scrolls beneath.
+//
+// Auto-scrolls so the TODAY chip is centered on first build. Subsequent
+// rebuilds preserve the user's manual scroll offset.
+// ---------------------------------------------------------------------------
+
+const double _kDayFilterBarHeight = 72;
+const double _kChipWidth = 60;
+const double _kChipGap = 8;
+const double _kBarHorizontalPadding = 12;
+
+class _DayFilterBarDelegate extends SliverPersistentHeaderDelegate {
+  _DayFilterBarDelegate({
+    required this.today,
+    required this.selectedDay,
+    required this.onSelect,
+  });
+
+  final DateTime today;
+  final DateTime? selectedDay;
+  final ValueChanged<DateTime?> onSelect;
+
+  @override
+  double get minExtent => _kDayFilterBarHeight;
+
+  @override
+  double get maxExtent => _kDayFilterBarHeight;
+
+  @override
+  Widget build(BuildContext context, double shrinkOffset, bool overlapsContent) {
+    return _DayFilterBar(
+      today: today,
+      selectedDay: selectedDay,
+      onSelect: onSelect,
+    );
+  }
+
+  @override
+  bool shouldRebuild(_DayFilterBarDelegate old) =>
+      old.selectedDay != selectedDay ||
+      !isSameLocalDay(old.today, today);
+}
+
+class _DayFilterBar extends StatefulWidget {
+  const _DayFilterBar({
+    required this.today,
+    required this.selectedDay,
+    required this.onSelect,
+  });
+
+  final DateTime today;
+  final DateTime? selectedDay;
+  final ValueChanged<DateTime?> onSelect;
+
+  @override
+  State<_DayFilterBar> createState() => _DayFilterBarState();
+}
+
+class _DayFilterBarState extends State<_DayFilterBar> {
+  final ScrollController _ctrl = ScrollController();
+  bool _centered = false;
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _centerOnToday(double viewportWidth) {
+    // Today is at index kDayWindowRadius in the day window. The chip
+    // bar lays out as: [padding][chip0][gap][chip1]…[chipN][gap][ALL].
+    // Center of chip i is at: padding + i*(width+gap) + width/2.
+    final centerOfToday = _kBarHorizontalPadding +
+        kDayWindowRadius * (_kChipWidth + _kChipGap) +
+        _kChipWidth / 2;
+    final target = (centerOfToday - viewportWidth / 2)
+        .clamp(0.0, _ctrl.position.maxScrollExtent);
+    _ctrl.jumpTo(target);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final days = buildDayWindow(widget.today);
+    final theme = Theme.of(context);
+
+    return Container(
+      // Opaque so list items don't bleed through while pinned.
+      color: AppColors.surfaceBase,
+      height: _kDayFilterBarHeight,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Expanded(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                if (!_centered) {
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted && _ctrl.hasClients && !_centered) {
+                      _centerOnToday(constraints.maxWidth);
+                      _centered = true;
+                    }
+                  });
+                }
+                return ListView.separated(
+                  controller: _ctrl,
+                  scrollDirection: Axis.horizontal,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: _kBarHorizontalPadding,
+                    vertical: 10,
+                  ),
+                  itemCount: days.length + 1, // +1 for ALL chip
+                  separatorBuilder: (_, __) =>
+                      const SizedBox(width: _kChipGap),
+                  itemBuilder: (ctx, i) {
+                    if (i < days.length) {
+                      final day = days[i];
+                      return _DayChip(
+                        day: day,
+                        isToday: isSameLocalDay(day, widget.today),
+                        isSelected: widget.selectedDay != null &&
+                            isSameLocalDay(day, widget.selectedDay!),
+                        onTap: () => widget.onSelect(day),
+                        theme: theme,
+                      );
+                    }
+                    return _AllChip(
+                      isSelected: widget.selectedDay == null,
+                      onTap: () => widget.onSelect(null),
+                      theme: theme,
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+          // Hairline divider so the pinned bar reads as a separate surface
+          // when matches scroll under it.
+          Container(
+            height: 1,
+            color: AppColors.outlineVariant.withValues(alpha: 0.4),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _DayChip extends StatelessWidget {
+  const _DayChip({
+    required this.day,
+    required this.isToday,
+    required this.isSelected,
+    required this.onTap,
+    required this.theme,
+  });
+
+  final DateTime day;
+  final bool isToday;
+  final bool isSelected;
+  final VoidCallback onTap;
+  final ThemeData theme;
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = isSelected
+        ? AppColors.primary
+        : AppColors.surfaceHigh;
+    final border = isSelected
+        ? AppColors.primary
+        : (isToday
+            ? AppColors.primary.withValues(alpha: 0.55)
+            : AppColors.outlineVariant);
+    final fg = isSelected
+        ? AppColors.onPrimary
+        : (isToday ? AppColors.primary : AppColors.onSurface);
+    final secondary = isSelected
+        ? AppColors.onPrimary.withValues(alpha: 0.85)
+        : AppColors.onSurfaceMuted;
+
+    final weekday = DateFormat('E').format(day).toUpperCase(); // MON
+    final dayNum = DateFormat('d').format(day); // 12
+
+    return SizedBox(
+      width: _kChipWidth,
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(14),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Ink(
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: border,
+                width: isSelected || isToday ? 1.5 : 1,
+              ),
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  isToday ? 'TODAY' : weekday,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: secondary,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.4,
+                    fontSize: 10,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  dayNum,
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    color: fg,
+                    fontWeight: FontWeight.w800,
+                    height: 1.0,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _AllChip extends StatelessWidget {
+  const _AllChip({
+    required this.isSelected,
+    required this.onTap,
+    required this.theme,
+  });
+
+  final bool isSelected;
+  final VoidCallback onTap;
+  final ThemeData theme;
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = isSelected ? AppColors.primary : AppColors.surfaceHigh;
+    final border =
+        isSelected ? AppColors.primary : AppColors.outlineVariant;
+    final fg = isSelected ? AppColors.onPrimary : AppColors.onSurface;
+
+    return SizedBox(
+      width: _kChipWidth,
+      child: Material(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(14),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: onTap,
+          child: Ink(
+            decoration: BoxDecoration(
+              color: bg,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: border, width: isSelected ? 1.5 : 1),
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Symbols.filter_alt_off,
+                  size: 16,
+                  color: fg,
+                  fill: isSelected ? 1 : 0,
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'ALL',
+                  style: theme.textTheme.labelMedium?.copyWith(
+                    color: fg,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.6,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DayEmptyState extends StatelessWidget {
+  const _DayEmptyState({required this.day});
+  final DateTime? day;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final label = day == null
+        ? 'No matches yet'
+        : 'No matches on ${DateFormat('EEE d MMM').format(day!)}';
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 48, 24, 24),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(
+            Symbols.event_busy,
+            size: 48,
+            color: AppColors.onSurfaceMuted,
+          ),
+          const SizedBox(height: 12),
+          Text(
+            label,
+            textAlign: TextAlign.center,
+            style: theme.textTheme.titleMedium?.copyWith(
+              color: AppColors.onSurface,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            day == null
+                ? 'The tournament hasn\'t started yet.'
+                : 'Try another day, or tap ALL to see every match.',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: AppColors.onSurfaceMuted,
+            ),
+          ),
+        ],
       ),
     );
   }
