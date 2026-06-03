@@ -199,102 +199,75 @@ class _CtaBanner extends StatelessWidget {
                 width: 1.5,
               ),
             ),
-            padding: const EdgeInsets.all(AppSpacing.lg),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            padding: const EdgeInsets.all(AppSpacing.md),
+            child: Row(
               children: [
-                Row(
-                  children: [
-                    Container(
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        color: AppColors.primaryContainer,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: const Icon(
-                        Icons.emoji_events,
-                        color: AppColors.gold,
-                        size: 28,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: AppColors.primaryContainer,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(
+                    Icons.emoji_events,
+                    color: AppColors.gold,
+                    size: 20,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
                         children: [
-                          Text(
-                            'Tournament picks',
-                            style: theme.textTheme.titleLarge?.copyWith(
-                              fontWeight: FontWeight.w800,
-                              letterSpacing: -0.2,
+                          Flexible(
+                            child: Text(
+                              'Tournament picks',
+                              style: theme.textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: -0.2,
+                              ),
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
-                          const SizedBox(height: 2),
-                          Text(
-                            'Worth up to +125 bonus points',
-                            style: theme.textTheme.bodyMedium?.copyWith(
-                              color: AppColors.onSurfaceVariant,
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: AppColors.primaryContainer,
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text(
+                              '+125 pts',
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: AppColors.primary,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 0.2,
+                              ),
                             ),
                           ),
                         ],
                       ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 14),
-                // Bonus breakdown
-                Row(
-                  children: [
-                    Expanded(
-                      child: _BonusTile(
-                        icon: Icons.flag,
-                        label: 'Winner',
-                        value: '+75',
+                      const SizedBox(height: 2),
+                      Text(
+                        lockText,
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: AppColors.onSurfaceMuted,
+                        ),
+                        overflow: TextOverflow.ellipsis,
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: _BonusTile(
-                        icon: Icons.sports_soccer,
-                        label: 'Golden Boot',
-                        value: '+50',
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 14),
-                // Big CTA button
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: onTap,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppColors.primary,
-                      foregroundColor: AppColors.onPrimary,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      textStyle: theme.textTheme.titleSmall?.copyWith(
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 0.3,
-                      ),
-                    ),
-                    icon: const Icon(Icons.arrow_forward, size: 18),
-                    label: const Text('SUBMIT YOUR PICKS'),
+                    ],
                   ),
                 ),
-                const SizedBox(height: 8),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.schedule, size: 12, color: AppColors.onSurfaceMuted),
-                    const SizedBox(width: 4),
-                    Text(
-                      lockText,
-                      style: theme.textTheme.labelSmall?.copyWith(
-                        color: AppColors.onSurfaceMuted,
-                      ),
-                    ),
-                  ],
+                const SizedBox(width: 10),
+                const Icon(
+                  Icons.chevron_right,
+                  size: 20,
+                  color: AppColors.primary,
                 ),
               ],
             ),
@@ -304,50 +277,6 @@ class _CtaBanner extends StatelessWidget {
     );
   }
 }
-
-class _BonusTile extends StatelessWidget {
-  const _BonusTile({required this.icon, required this.label, required this.value});
-  final IconData icon;
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceBase.withValues(alpha: 0.6),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: AppColors.outline),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, size: 18, color: AppColors.secondary),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              label,
-              style: theme.textTheme.labelMedium?.copyWith(
-                color: AppColors.onSurfaceVariant,
-                fontWeight: FontWeight.w600,
-              ),
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          Text(
-            value,
-            style: theme.textTheme.titleSmall?.copyWith(
-              color: AppColors.primary,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 // ─── Shared card for states 2/3/4 (picks submitted / locked / resolved) ──────
 
 class _BannerCard extends StatelessWidget {
