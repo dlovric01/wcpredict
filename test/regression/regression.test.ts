@@ -2073,18 +2073,13 @@ describe("Knockout Booster Edge Cases", () => {
       .eq("id", T.MATCH_KO);
   });
 
-  // ── Scoring DRIFT gaps ─────────────────────────────────────────────
-  // These document KNOWN gaps in the trigger surface. The trigger
-  // `check_booster_lock` only fires on INSERT/UPDATE, never DELETE; and
-  // moving the booster between matches (upsert with new match_id) does
-  // not re-run `compute_match_scoring` on the OLD match. If the old
-  // match has already finalised, its `multiplier` column is now stale.
-  //
-  // Until a DELETE trigger + cross-match recompute lands, these tests
-  // pin the current (buggy) behavior so that fixing it produces a
-  // test failure here as a forcing function.
+  // ── Scoring drift FIXED by migration 038 ────────────────────────────
+  // Mig 038 adds AFTER DELETE + AFTER UPDATE triggers on round_boosters
+  // that call compute_match_scoring on the old match. These tests assert
+  // the multiplier + points_earned snap back to base values once the
+  // booster reference goes away.
 
-  test("GAP: DELETE booster after final leaves multiplier stuck on prediction", async () => {
+  test("DELETE booster after final recomputes prediction down to base", async () => {
     await admin.from("predictions").delete().eq("match_id", T.MATCH_KO);
     await admin.from("match_events").delete().eq("match_id", T.MATCH_KO);
     await admin
@@ -2123,16 +2118,16 @@ describe("Knockout Booster Edge Cases", () => {
       .eq("round", "QF");
     await sleep(500);
 
-    // The prediction's multiplier is STALE — no DELETE trigger rewrites it.
+    // Mig 038's AFTER DELETE trigger fires compute_match_scoring on
+    // OLD.match_id, which rewrites multiplier=1 and points_earned=5.
     const { data: after } = await admin
       .from("predictions")
       .select("multiplier, points_earned")
       .eq("user_id", alice.userId)
       .eq("match_id", T.MATCH_KO)
       .single();
-    // KNOWN GAP: should be 1 / 5; currently 4 / 20.
-    expect(after?.multiplier).toBe(4);
-    expect(after?.points_earned).toBe(20);
+    expect(after?.multiplier).toBe(1);
+    expect(after?.points_earned).toBe(5);
 
     // Cleanup
     await admin.from("predictions").delete().eq("match_id", T.MATCH_KO);
@@ -2142,7 +2137,7 @@ describe("Knockout Booster Edge Cases", () => {
       .eq("id", T.MATCH_KO);
   });
 
-  test("GAP: MOVE booster after old match final leaves old prediction stuck", async () => {
+  test("MOVE booster after old match final recomputes old prediction down to base", async () => {
     await admin.from("predictions").delete().in("match_id", [T.MATCH_KO, T.MATCH_ET]);
     await admin.from("match_events").delete().in("match_id", [T.MATCH_KO, T.MATCH_ET]);
     // MATCH_ET ships with past kickoff — push to future so the upsert
@@ -2188,17 +2183,17 @@ describe("Knockout Booster Edge Cases", () => {
     );
     await sleep(500);
 
-    // MATCH_KO's prediction.multiplier is STALE — nothing recomputed
-    // the old match when the booster row moved.
+    // Mig 038's AFTER UPDATE trigger detects OLD.match_id != NEW.match_id
+    // and fires compute_match_scoring on the old match, rewriting its
+    // prediction multiplier=1 and points_earned=5.
     const { data: koAfter } = await admin
       .from("predictions")
       .select("multiplier, points_earned")
       .eq("user_id", alice.userId)
       .eq("match_id", T.MATCH_KO)
       .single();
-    // KNOWN GAP: should be 1 / 5; currently 4 / 20.
-    expect(koAfter?.multiplier).toBe(4);
-    expect(koAfter?.points_earned).toBe(20);
+    expect(koAfter?.multiplier).toBe(1);
+    expect(koAfter?.points_earned).toBe(5);
 
     // Cleanup — drop the booster, both predictions, restore MATCH_KO
     // to scheduled, and shove MATCH_ET back to its past kickoff so
