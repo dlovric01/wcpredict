@@ -417,11 +417,39 @@ class _MatchCard extends StatelessWidget {
                     child: _LiveTeamsBlock(match: match, theme: theme),
                   ),
                   if (isBoosted) ...[
-                    const SizedBox(width: 6),
-                    Icon(
-                      Icons.bolt,
-                      size: 18,
-                      color: AppColors.primary.withValues(alpha: 0.9),
+                    const SizedBox(width: 8),
+                    // Explicit textual signal alongside the green tint
+                    // — accessibility + at-a-glance visibility of the
+                    // applied multiplier ladder (R32 ×2 vs SF ×5).
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary.withValues(alpha: 0.18),
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(
+                          color: AppColors.primary.withValues(alpha: 0.55),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(
+                            Icons.bolt,
+                            size: 12,
+                            color: AppColors.primary,
+                          ),
+                          const SizedBox(width: 2),
+                          Text(
+                            '×${match.boosterMultiplier}',
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: AppColors.primary,
+                              fontWeight: FontWeight.w800,
+                              height: 1.0,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ],
                   const SizedBox(width: 10),
@@ -833,6 +861,18 @@ class _RoundBoostersStrip extends StatelessWidget {
               orElse: () => null,
             );
     final applied = appliedMatch != null;
+
+    // When unapplied, deep-link the tap to the first match in the round
+    // that's still pre-kickoff — that's the only matches where the booster
+    // toggle actually renders (locked matches show the predictions list,
+    // not the predict form). `?tab=predictions` selects the right tab so
+    // the toggle is visible immediately on landing.
+    final firstOpenInRound = applied
+        ? null
+        : matches
+            .where((m) => m.round == round && !m.isLocked)
+            .cast<MatchModel?>()
+            .firstWhere((_) => true, orElse: () => null);
     final theme = Theme.of(context);
 
     return Padding(
@@ -842,7 +882,11 @@ class _RoundBoostersStrip extends StatelessWidget {
         child: InkWell(
           onTap: applied
               ? () => context.push('/matches/${appliedMatch.id}')
-              : null,
+              : firstOpenInRound != null
+                  ? () => context.push(
+                        '/matches/${firstOpenInRound.id}?tab=predictions',
+                      )
+                  : null,
           borderRadius: AppRadii.cardRadius,
           child: Ink(
             decoration: BoxDecoration(
@@ -919,7 +963,12 @@ class _RoundBoostersStrip extends StatelessWidget {
                         Text(
                           applied
                               ? 'Booster applied · tap to open the match'
-                              : 'Tap a $round match to apply this round\'s booster',
+                              : firstOpenInRound != null
+                                  ? 'Tap to apply on '
+                                      '${firstOpenInRound.team1?.code ?? '???'} '
+                                      'vs '
+                                      '${firstOpenInRound.team2?.code ?? '???'}'
+                                  : 'Tap a $round match to apply this round\'s booster',
                           style: theme.textTheme.bodySmall?.copyWith(
                             color: AppColors.onSurfaceMuted,
                           ),
@@ -929,7 +978,7 @@ class _RoundBoostersStrip extends StatelessWidget {
                       ],
                     ),
                   ),
-                  if (applied)
+                  if (applied || firstOpenInRound != null)
                     const Icon(
                       Icons.chevron_right,
                       size: 20,
