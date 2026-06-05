@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:wcpredict/core/models/match_model.dart';
 import 'package:wcpredict/core/models/prediction_model.dart';
@@ -38,25 +39,69 @@ final clockTickerProvider = StreamProvider<DateTime>((ref) async* {
   );
 });
 
-/// Single websocket subscription to the `matches` table, scoped via
-/// `.stream()`'s single-filter slot to a rolling 6-hour-past lower
-/// bound on `kickoff_time`. Matches older than that (group-stage
-/// fixtures finished days ago) never push deltas through the
-/// websocket — the baseline `allMatchesProvider` fetch covers their
-/// static state.
+/// True when the app should hold a Supabase Realtime websocket open
+/// for the `matches` table. The websocket counts against the free
+/// plan's 200-concurrent-connection cap and the 2M-msg/mo budget,
+/// so we only open it when something is actually live or imminent.
 ///
-/// On the Supabase free plan (2M realtime messages / month, 5GB
-/// egress), this turns a World Cup poll over 64 finalised fixtures
-/// into a poll over the ~5-15 fixtures in the active window —
-/// roughly an order-of-magnitude reduction during tournament weeks.
+/// Open when ANY match is either:
+///   * `status == 'live'` (regardless of wall-clock), OR
+///   * within `[kickoff - 5 min .. kickoff + 3 h]` (covers warm-up,
+///     90' regulation, ET, penalty shootout, and the final-flag
+///     window where `poll_live_matches` is still writing).
 ///
-/// supabase_flutter's `.stream()` builder accepts only a single
+/// Re-evaluated on every `clockTickerProvider` emit (30 s). Returns a
+/// bool that only triggers downstream rebuilds when the gate actually
+/// flips — so dependents don't churn every 30 s.
+/// Pure decision: should the realtime websocket be open right now?
+///
+/// Exposed for unit tests; the production caller (`_realtimeGateProvider`)
+/// wires this to the actual `clockTickerProvider` + `allMatchesProvider`
+/// inputs.
+@visibleForTesting
+bool shouldOpenRealtimeSocket(List<MatchModel> matches, DateTime now) {
+  for (final m in matches) {
+    if (m.status == 'live') return true;
+    final k = m.kickoffTime;
+    if (k == null) continue;
+    final open  = k.subtract(const Duration(minutes: 5));
+    final close = k.add(const Duration(hours: 3));
+    if (now.isAfter(open) && now.isBefore(close)) return true;
+  }
+  return false;
+}
+
+final _realtimeGateProvider = Provider<bool>((ref) {
+  final now = ref.watch(clockTickerProvider).valueOrNull ?? DateTime.now();
+  final matches = ref.watch(allMatchesProvider).valueOrNull;
+  if (matches == null) return false;
+  return shouldOpenRealtimeSocket(matches, now);
+});
+
+/// Single websocket subscription to the `matches` table, gated on
+/// `_realtimeGateProvider`. When no match is live or imminent the
+/// stream is replaced with `Stream.value(emptyMap)`, the old socket
+/// closes, and the app holds zero realtime connections — critical
+/// for fitting ~200 concurrent users into the free plan's
+/// 200-connection cap.
+///
+/// When the gate flips open (5 min before a kickoff), a new
+/// subscription is created scoped via `.stream()`'s single-filter
+/// slot to a rolling 6-hour-past lower bound on `kickoff_time`.
+/// Finalised group-stage fixtures from days ago stay out of the
+/// publication entirely.
+///
+/// `supabase_flutter`'s `.stream()` builder accepts only a single
 /// chained filter; the test-fixture exclusion (`id < 100000`) is
 /// applied client-side after the snapshot arrives.
 ///
 /// Internal — consumers should use [liveMatchProvider] which fans
 /// out per-id with `.select` to avoid spurious rebuilds.
 final _liveMatchesMapProvider = StreamProvider<Map<int, MatchModel>>((ref) {
+  final gateOpen = ref.watch(_realtimeGateProvider);
+  if (!gateOpen) {
+    return Stream.value(const <int, MatchModel>{});
+  }
   final windowStart = DateTime.now()
       .toUtc()
       .subtract(const Duration(hours: 6))

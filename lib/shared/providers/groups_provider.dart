@@ -7,7 +7,13 @@ import 'package:wcpredict/core/models/profile_model.dart';
 import 'package:wcpredict/core/supabase_client.dart';
 import 'package:wcpredict/shared/providers/auth_provider.dart';
 
-/// Groups the current user belongs to.
+/// Groups the current user belongs to, with `memberCount` filled in
+/// via a single batched follow-up query. Two round-trips total: one
+/// to filter groups by membership, one to count members per group.
+///
+/// `group_members_read` RLS (migration 002) allows a member to see
+/// every row for groups they belong to, so the count query returns
+/// real totals — not just the caller's own membership.
 final myGroupsProvider = FutureProvider<List<GroupModel>>((ref) async {
   final userId = ref.watch(currentUserIdProvider);
   if (userId == null) return [];
@@ -16,8 +22,27 @@ final myGroupsProvider = FutureProvider<List<GroupModel>>((ref) async {
       .select('*, group_members!inner(user_id)')
       .eq('group_members.user_id', userId)
       .order('created_at');
-  return (data as List)
+  final groups = (data as List)
       .map((e) => GroupModel.fromJson(e as Map<String, dynamic>))
+      .toList();
+  if (groups.isEmpty) return groups;
+
+  // Batched count fetch. Single round-trip; RLS already restricts the
+  // result to groups the user can see.
+  final ids = groups.map((g) => g.id).toList();
+  final rows = await supabase
+      .from('group_members')
+      .select('group_id')
+      .inFilter('group_id', ids);
+
+  final counts = <String, int>{};
+  for (final row in rows as List) {
+    final gid = (row as Map<String, dynamic>)['group_id'] as String;
+    counts[gid] = (counts[gid] ?? 0) + 1;
+  }
+
+  return groups
+      .map((g) => g.copyWith(memberCount: counts[g.id] ?? 1))
       .toList();
 });
 

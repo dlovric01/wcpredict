@@ -5,12 +5,19 @@ class GroupModel {
   final String? inviteCode;
   final DateTime? createdAt;
 
+  /// Total members in this group, populated by `myGroupsProvider` via a
+  /// batched count query. Null when the value is not known at
+  /// construction time (e.g. parsing a stand-alone row outside the
+  /// groups-list flow).
+  final int? memberCount;
+
   const GroupModel({
     required this.id,
     required this.name,
     required this.ownerId,
     this.inviteCode,
     this.createdAt,
+    this.memberCount,
   });
 
   factory GroupModel.fromJson(Map<String, dynamic> json) {
@@ -22,6 +29,7 @@ class GroupModel {
       createdAt: json['created_at'] != null
           ? DateTime.parse(json['created_at'] as String)
           : null,
+      memberCount: (json['member_count'] as num?)?.toInt(),
     );
   }
 
@@ -31,7 +39,17 @@ class GroupModel {
         'owner_id': ownerId,
         'invite_code': inviteCode,
         'created_at': createdAt?.toIso8601String(),
+        if (memberCount != null) 'member_count': memberCount,
       };
+
+  GroupModel copyWith({int? memberCount}) => GroupModel(
+        id: id,
+        name: name,
+        ownerId: ownerId,
+        inviteCode: inviteCode,
+        createdAt: createdAt,
+        memberCount: memberCount ?? this.memberCount,
+      );
 }
 
 class GroupMemberModel {

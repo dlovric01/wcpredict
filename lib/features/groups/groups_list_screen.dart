@@ -23,7 +23,12 @@ class GroupsListScreen extends ConsumerWidget {
         actions: [
           if (hasGroups)
             IconButton(
-              icon: const Icon(Symbols.add),
+              icon: const Icon(
+                Symbols.add,
+                weight: 600,
+                color: AppColors.onSurface,
+              ),
+              tooltip: 'Add a group',
               onPressed: () => _showGroupActions(context, ref),
             ),
         ],
@@ -134,6 +139,7 @@ class _GroupsList extends ConsumerWidget {
                 name: group.name,
                 initial:
                     group.name.isNotEmpty ? group.name[0].toUpperCase() : '?',
+                memberCount: group.memberCount,
                 onTap: () => context.push('/groups/${group.id}'),
               )
                   .animate(delay: Duration(milliseconds: i * 60))
@@ -152,11 +158,13 @@ class _GroupTile extends StatelessWidget {
     required this.name,
     required this.initial,
     required this.onTap,
+    this.memberCount,
   });
 
   final String name;
   final String initial;
   final VoidCallback onTap;
+  final int? memberCount;
 
   @override
   Widget build(BuildContext context) {
@@ -178,10 +186,12 @@ class _GroupTile extends StatelessWidget {
               ),
             ),
             title: Text(name),
-            subtitle: Text(
-              'Your group',
-              style: TextStyle(color: AppColors.onSurfaceVariant),
-            ),
+            subtitle: memberCount == null
+                ? null
+                : Text(
+                    memberCount == 1 ? '1 member' : '$memberCount members',
+                    style: TextStyle(color: AppColors.onSurfaceVariant),
+                  ),
             trailing: Icon(
               Icons.chevron_right,
               color: AppColors.onSurfaceVariant,

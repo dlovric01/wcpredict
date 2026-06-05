@@ -1,5 +1,10 @@
 import { corsHeaders } from '../_shared/cors.ts';
 import { supabaseAdmin } from '../_shared/supabase.ts';
+import {
+  type ApiEventRow,
+  type DbEventRow,
+  diffEvents,
+} from '../_shared/event_diff.ts';
 
 const BASE = 'https://v3.football.api-sports.io';
 const LEAGUE = 1;
@@ -43,21 +48,31 @@ function mapEventDetail(type: string, detail: string): string | null {
   return null;
 }
 
-// Refresh stored match_events for `matchId` from the api-sports.io events
-// endpoint.
+// Sync stored match_events for `matchId` against the api-sports.io
+// events endpoint using a signature-based diff.
 //
-//   { ok: true,  inserted: N }  — events fetched + persisted (N may be 0
-//                                 for a clean 0-0 with no cards/subs)
-//   { ok: false, inserted: 0 }  — API fetch or DB insert failed; caller
-//                                 MUST treat this as transient and retry
-//                                 on the next cron tick
+// Returns:
+//   { ok: true,  inserted: N }  — N rows newly inserted this call.
+//                                 Steady-state polls (no goals/cards/
+//                                 subs since last poll) return N=0
+//                                 and emit ZERO CDC writes — the
+//                                 critical optimisation for staying
+//                                 under the Supabase free-plan
+//                                 realtime-message budget.
+//   { ok: false, inserted: 0 }  — API fetch or DB write failed; caller
+//                                 MUST treat this as transient and
+//                                 retry on the next cron tick.
 //
-// `ok` exists specifically so finalisation can refuse to flip a match to
-// `final` when the events fetch failed. Setting `status='final'` fires
-// `trigger_compute_scoring()`, which uses the (now-stale or empty) events
-// to award the goalscorer and first-team bonuses. Finalising blindly
-// would lock in 0 bonuses with no self-healing path (the match is no
-// longer in this function's `activeMatches` filter).
+// `ok` exists specifically so finalisation can refuse to flip a match
+// to `final` when the events fetch failed. Setting `status='final'`
+// fires `trigger_compute_scoring()`, which uses match_events to award
+// the goalscorer and first-team bonuses. Finalising blindly would
+// lock in 0 bonuses with no self-healing path (the match is no longer
+// in this function's `activeMatches` filter).
+//
+// VAR semantics are preserved: a row that vanishes from the API
+// response is DELETEd here; the migration-037 trigger fires per row
+// and re-runs compute_match_scoring with the new event set.
 async function upsertEvents(
   matchId: number,
   key: string,
@@ -69,7 +84,7 @@ async function upsertEvents(
   const json = await res.json();
   const apiEvents = (json.response ?? []) as any[];
 
-  const rows = apiEvents
+  const incoming: ApiEventRow[] = apiEvents
     .filter((e: any) => {
       const t = mapEventType(e.type, e.comments ?? null);
       if (!t) return false;
@@ -81,27 +96,49 @@ async function upsertEvents(
       match_id: matchId,
       minute:       e.time.elapsed,
       minute_extra: e.time.extra ?? null,
-      type: mapEventType(e.type, e.comments ?? null),
+      type: mapEventType(e.type, e.comments ?? null)!,
       team_id: e.team?.id ?? null,
       player_id: e.player?.id ?? null,
       player_name: e.player?.name ?? null,
       detail: mapEventDetail(e.type, e.detail ?? ''),
     }));
 
-  if (rows.length === 0) {
-    // Legit empty event list (e.g. 0-0 with no cards). Clear any stale
-    // rows from a previous poll so the timeline reflects API truth.
+  // Load existing rows for this match so we can diff. Excluding `id`
+  // would force two round-trips; PostgREST select is cheap.
+  const { data: existingRaw, error: selErr } = await supabaseAdmin
+    .from('match_events')
+    .select('id, match_id, minute, minute_extra, type, team_id, player_id, player_name, detail')
+    .eq('match_id', matchId);
+  if (selErr) return { ok: false, inserted: 0 };
+  const existing = (existingRaw ?? []) as DbEventRow[];
+
+  const { toInsert, toDelete } = diffEvents(existing, incoming);
+
+  // Steady-state short-circuit: nothing changed since last poll. NO
+  // writes → no CDC fan-out to realtime subscribers.
+  if (toInsert.length === 0 && toDelete.length === 0) {
+    return { ok: true, inserted: 0 };
+  }
+
+  // VAR-style removal first. The migration-037 trigger short-circuits
+  // unless status='final', so during live play this is a pure DB op;
+  // post-final it correctly re-runs scoring against the remaining set.
+  if (toDelete.length > 0) {
     const { error: delErr } = await supabaseAdmin
       .from('match_events')
       .delete()
-      .eq('match_id', matchId);
-    return { ok: !delErr, inserted: 0 };
+      .in('id', toDelete);
+    if (delErr) return { ok: false, inserted: 0 };
   }
 
-  // Delete then re-insert for idempotency — keeps event order stable.
-  await supabaseAdmin.from('match_events').delete().eq('match_id', matchId);
-  const { error } = await supabaseAdmin.from('match_events').insert(rows);
-  return { ok: !error, inserted: error ? 0 : rows.length };
+  if (toInsert.length > 0) {
+    const { error: insErr } = await supabaseAdmin
+      .from('match_events')
+      .insert(toInsert);
+    if (insErr) return { ok: false, inserted: 0 };
+  }
+
+  return { ok: true, inserted: toInsert.length };
 }
 
 Deno.serve(async (req) => {
@@ -113,7 +150,7 @@ Deno.serve(async (req) => {
     // ── Find all matches that have kicked off but are not yet final/cancelled.
     const { data: activeMatches } = await supabaseAdmin
       .from('matches')
-      .select('id, kickoff_time, status')
+      .select('id, kickoff_time, status, score_ft_team1, score_ft_team2, current_minute, current_minute_extra, current_period')
       .lte('kickoff_time', now.toISOString())
       .not('status', 'in', '("final","cancelled")');
 
@@ -144,37 +181,53 @@ Deno.serve(async (req) => {
         const f = liveById.get(match.id);
         if (!f) continue;
 
-        const { error } = await supabaseAdmin
-          .from('matches')
-          .update({
-            status: 'live',
-            score_ft_team1: f.goals.home,
-            score_ft_team2: f.goals.away,
-            // Authoritative live broadcast minute + phase from api-sports
-            // (Pro plan provides these on every fixture in the live feed).
-            // Lets the Flutter client display "67'" / "HT" / "ET" / "PEN"
-            // straight from the source instead of deriving them from
-            // kickoff_time + a half-time-break heuristic.
-            //
-            //   status.elapsed → current_minute
-            //   status.extra   → current_minute_extra (stoppage)
-            //   status.short   → current_period (1H / HT / 2H / ET / BT / P)
-            current_minute:       f.fixture.status?.elapsed ?? null,
-            current_minute_extra: f.fixture.status?.extra   ?? null,
-            current_period:       f.fixture.status?.short   ?? null,
-            updated_at: now.toISOString(),
-          })
-          .eq('id', match.id);
+        // Build the incoming row from api-sports.io (Pro plan provides
+        // status.elapsed / extra / short on every live fixture). Lets
+        // the Flutter client render "67'" / "HT" / "ET" / "PEN" from
+        // source instead of guessing via the kickoff-time heuristic.
+        //
+        //   status.elapsed → current_minute
+        //   status.extra   → current_minute_extra (stoppage)
+        //   status.short   → current_period (1H / HT / 2H / ET / BT / P)
+        const next = {
+          status: 'live' as const,
+          score_ft_team1: f.goals.home ?? null,
+          score_ft_team2: f.goals.away ?? null,
+          current_minute:       f.fixture.status?.elapsed ?? null,
+          current_minute_extra: f.fixture.status?.extra   ?? null,
+          current_period:       f.fixture.status?.short   ?? null,
+        };
 
-        if (!error) {
+        // Skip the UPDATE entirely when nothing user-visible changed.
+        // Postgres CDC would otherwise fan an unchanged row out to
+        // every Realtime subscriber — pure noise that eats the free
+        // plan's 2M-msg/mo budget. Steady-state HT polls (15+ minutes
+        // of pinned `elapsed`/`extra`/`period`), suspended matches,
+        // and any sub-minute re-poll all become true no-ops.
+        const unchanged =
+          match.status === next.status &&
+          match.score_ft_team1 === next.score_ft_team1 &&
+          match.score_ft_team2 === next.score_ft_team2 &&
+          match.current_minute === next.current_minute &&
+          match.current_minute_extra === next.current_minute_extra &&
+          match.current_period === next.current_period;
+
+        if (!unchanged) {
+          const { error } = await supabaseAdmin
+            .from('matches')
+            .update({ ...next, updated_at: now.toISOString() })
+            .eq('id', match.id);
+          if (error) continue;
           liveUpdated++;
-          // Fetch events so the timeline stays current during the match.
-          // Safe to refresh here: the per-row `match_event_deleted` trigger
-          // short-circuits on `status='live'`, so the delete-then-insert
-          // inside upsertEvents does not bounce scoring.
-          const ev = await upsertEvents(match.id, key);
-          eventsInserted += ev.inserted;
         }
+
+        // Refresh events on every cycle regardless of whether the
+        // matches row moved: upsertEvents does its own signature diff
+        // and short-circuits when nothing changed. Safe under the
+        // migration-037 trigger because the surgical DELETE here only
+        // fires for events actually removed from the API response.
+        const ev = await upsertEvents(match.id, key);
+        eventsInserted += ev.inserted;
       }
     }
 

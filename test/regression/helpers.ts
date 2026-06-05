@@ -9,12 +9,22 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
-export const SUPABASE_URL = "https://txziwjxvfprjilfyibol.supabase.co";
+// Defaults target the live project; export `SUPABASE_REGRESSION_URL` /
+// `_ANON` / `_SERVICE` to redirect the suite at a local stack (e.g.
+// the values printed by `supabase status -o env` after `supabase
+// start`). The fallback keys below are HS256-signed (legacy format),
+// which PostgREST accepts but `auth.admin.createUser` does not on
+// CLI v2.75+; supply the local SERVICE key from `supabase status`
+// when running locally.
+export const SUPABASE_URL =
+  process.env.SUPABASE_REGRESSION_URL ?? "https://txziwjxvfprjilfyibol.supabase.co";
 
 export const ANON_KEY =
+  process.env.SUPABASE_REGRESSION_ANON ??
   "REDACTED-ANON-JWT";
 
 export const SERVICE_KEY =
+  process.env.SUPABASE_REGRESSION_SERVICE ??
   "REDACTED-SERVICE-ROLE-JWT";
 
 // ─── Test constants ────────────────────────────────────────────────────────────

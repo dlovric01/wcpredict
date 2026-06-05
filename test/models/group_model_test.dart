@@ -21,10 +21,60 @@ void main() {
           '2026-05-01T10:00:00.000Z');
 
       final j = g.toJson();
-      expect(j.keys.toSet(),
-          {'id', 'name', 'owner_id', 'invite_code', 'created_at'});
+      expect(
+        j.keys.toSet(),
+        {'id', 'name', 'owner_id', 'invite_code', 'created_at'},
+        reason: 'member_count is only emitted when populated; '
+            'this row was parsed without it',
+      );
       expect(j['invite_code'], 'WC2026');
       expect(j['created_at'], '2026-05-01T10:00:00.000Z');
+    });
+
+    test('parses + serialises member_count when present', () {
+      final g = GroupModel.fromJson({
+        'id': 'g',
+        'name': 'Office Pool',
+        'owner_id': 'u',
+        'member_count': 7,
+      });
+      expect(g.memberCount, 7);
+      // Numerics-from-double defensive case.
+      final g2 = GroupModel.fromJson({
+        'id': 'g',
+        'name': 'Office Pool',
+        'owner_id': 'u',
+        'member_count': 7.0,
+      });
+      expect(g2.memberCount, 7);
+
+      final j = g.toJson();
+      expect(j['member_count'], 7);
+    });
+
+    test('memberCount absent → omitted from toJson (not just null)', () {
+      final g = GroupModel.fromJson({
+        'id': 'g',
+        'name': 'New Group',
+        'owner_id': 'u',
+      });
+      expect(g.memberCount, isNull);
+      expect(g.toJson().containsKey('member_count'), isFalse);
+    });
+
+    test('copyWith memberCount only patches the count, leaves rest intact', () {
+      final base = GroupModel.fromJson({
+        'id': 'g',
+        'name': 'New Group',
+        'owner_id': 'u',
+        'invite_code': 'CODE',
+      });
+      final patched = base.copyWith(memberCount: 3);
+      expect(patched.memberCount, 3);
+      expect(patched.id, base.id);
+      expect(patched.name, base.name);
+      expect(patched.ownerId, base.ownerId);
+      expect(patched.inviteCode, base.inviteCode);
     });
 
     test('tolerates null inviteCode and createdAt', () {

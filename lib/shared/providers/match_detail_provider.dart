@@ -3,6 +3,7 @@ import 'package:wcpredict/core/models/match_event_model.dart';
 import 'package:wcpredict/core/models/match_model.dart';
 import 'package:wcpredict/core/supabase_client.dart';
 import 'package:wcpredict/core/models/player_model.dart';
+import 'package:wcpredict/shared/providers/matches_provider.dart';
 
 /// Single match by id — joins both teams with their players.
 ///
@@ -75,26 +76,82 @@ final matchEventsProvider = FutureProvider.autoDispose
       .toList();
 });
 
-/// Streams match events in real-time. Falls back to FutureProvider data
-/// for finished matches; live matches get push updates.
+/// Match-event timeline. Realtime push during the live window, plain
+/// one-shot fetch otherwise.
+///
+/// Why the gate: holding a websocket open for every detail-view of a
+/// finished match would burn through the Supabase free-plan
+/// 200-concurrent-connection cap once users start browsing past
+/// results. A final match's events never change again (modulo manual
+/// VAR corrections, which are rare), so a single SELECT is enough.
+///
+/// Subscribes ONLY when the match is `status == 'live'` or within
+/// `[kickoff - 5 min .. kickoff + 3 h]`. Anything else (final,
+/// cancelled, far-future scheduled, missing from cache) gets a
+/// one-shot fetch.
+///
+/// `clockTickerProvider` (30 s) is watched so a scheduled match
+/// crossing into its window transparently upgrades from one-shot to
+/// streaming without the user closing and re-opening the screen.
 final matchEventsStreamProvider = StreamProvider.family
-    .autoDispose<List<MatchEventModel>, int>((ref, matchId) {
-  return supabase
+    .autoDispose<List<MatchEventModel>, int>((ref, matchId) async* {
+  final now = ref.watch(clockTickerProvider).valueOrNull ?? DateTime.now();
+  final matches = ref.watch(allMatchesProvider).valueOrNull;
+
+  MatchModel? match;
+  if (matches != null) {
+    for (final m in matches) {
+      if (m.id == matchId) {
+        match = m;
+        break;
+      }
+    }
+  }
+
+  bool needsRealtime = false;
+  if (match != null) {
+    if (match.status == 'live') {
+      needsRealtime = true;
+    } else if (match.status != 'final' && match.status != 'cancelled') {
+      final k = match.kickoffTime;
+      if (k != null) {
+        final open  = k.subtract(const Duration(minutes: 5));
+        final close = k.add(const Duration(hours: 3));
+        if (now.isAfter(open) && now.isBefore(close)) needsRealtime = true;
+      }
+    }
+  }
+
+  List<MatchEventModel> sortEvents(Iterable<MatchEventModel> events) {
+    // Sort client-side ascending by minute. The stream's .order()
+    // only applies to the initial fetch; subsequent realtime upserts
+    // append in insertion order, which is wrong for out-of-order
+    // goals (VAR overturns, delayed event ingestion).
+    final list = events.toList()
+      ..sort((a, b) {
+        final am = a.minute ?? 0;
+        final bm = b.minute ?? 0;
+        if (am != bm) return am.compareTo(bm);
+        return (a.minuteExtra ?? 0).compareTo(b.minuteExtra ?? 0);
+      });
+    return list;
+  }
+
+  if (!needsRealtime) {
+    final rows = await supabase
+        .from('match_events')
+        .select()
+        .eq('match_id', matchId)
+        .order('minute');
+    yield sortEvents(
+      (rows as List).map((e) => MatchEventModel.fromJson(e as Map<String, dynamic>)),
+    );
+    return;
+  }
+
+  yield* supabase
       .from('match_events')
       .stream(primaryKey: ['id'])
       .eq('match_id', matchId)
-      .map((rows) {
-        // Sort client-side ascending by minute. The stream's .order()
-        // only applies to the initial fetch; subsequent realtime
-        // upserts append in insertion order, which is wrong for
-        // out-of-order goals (VAR overturns, delayed event ingestion).
-        final events = rows.map(MatchEventModel.fromJson).toList()
-          ..sort((a, b) {
-            final am = a.minute ?? 0;
-            final bm = b.minute ?? 0;
-            if (am != bm) return am.compareTo(bm);
-            return (a.minuteExtra ?? 0).compareTo(b.minuteExtra ?? 0);
-          });
-        return events;
-      });
+      .map((rows) => sortEvents(rows.map(MatchEventModel.fromJson)));
 });

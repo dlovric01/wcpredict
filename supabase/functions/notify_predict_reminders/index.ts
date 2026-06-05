@@ -17,14 +17,17 @@
 
 import { corsHeaders } from '../_shared/cors.ts';
 import { supabaseAdmin } from '../_shared/supabase.ts';
+import {
+  type DeviceTokenRow,
+  isPermanentFcmError,
+  pickOneTokenPerUser,
+} from '../_shared/device_token_dedup.ts';
 
 type ServiceAccount = {
   client_email: string;
   private_key: string;
   project_id?: string;
 };
-
-type DeviceTokenRow = { user_id: string; token: string; platform: string };
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -194,14 +197,22 @@ Deno.serve(async (req) => {
         (alreadySentRows ?? []).map((r: { user_id: string }) => r.user_id),
       );
 
+      // Pull all device_tokens with their updated_at — we'll dedupe
+      // per user below so a single human gets ONE push, not N (where
+      // N is the count of stale tokens accumulated through reinstalls
+      // / token rotation / debug-vs-release builds).
       const { data: tokens } = await supabaseAdmin
         .from('device_tokens')
-        .select('user_id, token, platform');
+        .select('user_id, token, platform, updated_at');
 
       const candidates = (tokens ?? []) as DeviceTokenRow[];
-      const targets = candidates.filter(
+      const eligible = candidates.filter(
         (t) => !predictedSet.has(t.user_id) && !alreadySent.has(t.user_id),
       );
+      // One token per user (most-recent `updated_at`). This is the
+      // critical fix — without it the same user receives one push
+      // per row they have in device_tokens.
+      const targets = pickOneTokenPerUser(eligible);
 
       if (targets.length === 0) {
         totalSkipped++;
@@ -209,13 +220,14 @@ Deno.serve(async (req) => {
       }
 
       const recipientUserIds = new Set<string>();
+      const staleTokens: string[] = [];
       const title = `Predict ${m.team1?.code ?? 'TBD'} vs ${m.team2?.code ?? 'TBD'}`;
       const body = 'Kickoff in 30 minutes — tap to submit your pick';
       const deepLink = `/matches/${m.id}`;
 
-      // Fire-and-forget per token. We log a "sent" record per recipient
-      // regardless of HTTP outcome to avoid retry storms — one missed
-      // push is acceptable, repeated pushes are not.
+      // Fire-and-forget per recipient. We log a "sent" record per
+      // recipient regardless of HTTP outcome to avoid retry storms —
+      // one missed push is acceptable, repeated pushes are not.
       await Promise.allSettled(
         targets.map(async (t) => {
           const payload = {
@@ -242,10 +254,19 @@ Deno.serve(async (req) => {
               },
             );
             if (!res.ok) {
-              const txt = await res.text();
+              // Parse body as JSON if possible so the error-code
+              // classifier can read FcmError.errorCode.
+              const rawText = await res.text();
+              let parsed: unknown = null;
+              try { parsed = JSON.parse(rawText); } catch { /* not JSON */ }
               console.warn(
-                `FCM send failed for ${t.token.slice(0, 10)}…: ${res.status} ${txt}`,
+                `FCM send failed for ${t.token.slice(0, 10)}…: ${res.status} ${rawText}`,
               );
+              if (isPermanentFcmError(res.status, parsed)) {
+                // Self-heal: queue this row for deletion so we stop
+                // dispatching to a token FCM has invalidated.
+                staleTokens.push(t.token);
+              }
             } else {
               totalSends++;
             }
@@ -255,6 +276,16 @@ Deno.serve(async (req) => {
           recipientUserIds.add(t.user_id);
         }),
       );
+
+      if (staleTokens.length > 0) {
+        const { error: delErr } = await supabaseAdmin
+          .from('device_tokens')
+          .delete()
+          .in('token', staleTokens);
+        if (delErr) {
+          console.warn('stale device_tokens delete failed:', delErr.message);
+        }
+      }
 
       if (recipientUserIds.size > 0) {
         const rows = Array.from(recipientUserIds).map((uid) => ({

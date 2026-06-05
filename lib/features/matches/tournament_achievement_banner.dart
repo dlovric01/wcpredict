@@ -37,118 +37,81 @@ class TournamentAchievementBanner extends ConsumerWidget {
         ? ref.watch(playerByIdProvider(pred!.goldenBootPlayerId!)).valueOrNull
         : null;
     final pickedPlayer = pickedPlayerHit?.player;
-    final actualTeam = results?.winnerTeamId != null
-        ? ref.watch(teamByIdProvider(results!.winnerTeamId!)).valueOrNull
-        : null;
-    final actualPlayerHit = results?.goldenBootPlayerId != null
-        ? ref.watch(playerByIdProvider(results!.goldenBootPlayerId!)).valueOrNull
-        : null;
-    final actualPlayer = actualPlayerHit?.player;
-
     final hasPicks = pickedTeam != null || pickedPlayer != null;
 
     // ── State 4: resolved (results posted) ──────────────────────────────────
     if (resolved) {
-      final wcHit = pred?.wcWinnerTeamId != null
-          && pred?.wcWinnerTeamId == results.winnerTeamId;
-      final gbHit = pred?.goldenBootPlayerId != null
-          && pred?.goldenBootPlayerId == results.goldenBootPlayerId;
       final earned = pred?.pointsEarned ?? 0;
-
-      return _BannerCard(
-        accent: earned > 0 ? AppColors.primary : AppColors.onSurfaceMuted,
+      final won = earned > 0;
+      return _CompactPill(
         icon: Icons.emoji_events,
-        iconColor: earned > 0 ? AppColors.gold : AppColors.onSurfaceMuted,
-        title: 'Tournament bonus',
-        subtitle: earned > 0
-            ? 'You earned $earned points'
-            : 'Better luck next tournament',
-        rightBadge: _PointsBadge(
-          points: earned,
-          big: true,
-          positive: earned > 0,
+        iconColor: won ? AppColors.gold : AppColors.onSurfaceMuted,
+        middle: Text(
+          'Tournament bonus',
+          style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: AppColors.onSurface,
+              ),
         ),
-        rows: [
-          _ResolvedRow(
-            label: 'Winner',
-            actualName: actualTeam?.name ?? '—',
-            actualFlag: actualTeam?.flagUrl,
-            pickedName: pickedTeam?.name,
-            hit: wcHit,
-            bonus: 75,
-          ),
-          _ResolvedRow(
-            label: 'Golden Boot',
-            actualName: actualPlayer?.name ?? '—',
-            pickedName: pickedPlayer?.name,
-            hit: gbHit,
-            bonus: 50,
-          ),
-        ],
+        trailing: _PointsBadge(points: earned, positive: won),
+        onTap: () => context.push('/tournament'),
       );
     }
 
-    // ── State 3: locked, awaiting results ───────────────────────────────────
+    // ── State 3: locked, awaiting results ──────────────────────────────────
+    // Compact pill: picks frozen, results pending. Tap routes to /tournament
+    // for the full breakdown.
     if (locked) {
-      return _BannerCard(
-        accent: AppColors.locked,
+      final theme = Theme.of(context);
+      return _CompactPill(
         icon: Icons.lock_outline,
         iconColor: AppColors.locked,
-        title: 'Tournament picks · Locked',
-        subtitle: hasPicks
-            ? 'Awaiting tournament results'
-            : 'You missed the opening match',
-        rightBadge: const _PointsBadge(points: 125, label: 'TBD'),
-        rows: [
-          _PickedRow(
-            label: 'Winner',
-            value: pickedTeam?.name ?? 'No pick',
-            flagUrl: pickedTeam?.flagUrl,
-            placeholder: pickedTeam == null,
-            bonus: 75,
-            icon: Icons.flag_outlined,
-          ),
-          _PickedRow(
-            label: 'Golden Boot',
-            value: pickedPlayer?.name ?? 'No pick',
-            placeholder: pickedPlayer == null,
-            bonus: 50,
-            icon: Icons.sports_soccer_outlined,
-          ),
-        ],
+        middle: hasPicks
+            ? _PicksLine(
+                teamName: pickedTeam?.name,
+                teamFlagUrl: pickedTeam?.flagUrl,
+                playerName: pickedPlayer?.name,
+                style: theme.textTheme.bodyMedium,
+              )
+            : Text(
+                'No tournament picks',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                      color: AppColors.onSurfaceMuted,
+                    ),
+              ),
+        trailing: Text(
+          'TBD',
+          style: theme.textTheme.labelSmall?.copyWith(
+                color: AppColors.onSurfaceMuted,
+                letterSpacing: 0.5,
+              ),
+        ),
+        onTap: () => context.push('/tournament'),
       );
     }
 
-    // ── State 2: open, picks already submitted ──────────────────────────────
+    // ── State 2: open, picks already submitted ─────────────────────────────
+    // Also compact — once committed there's no reason to occupy a full card
+    // in the matches list. The "Edit" hint signals the picks are still
+    // editable; the big CTA banner only renders in State 1 (no picks yet).
     if (hasPicks) {
-      final lockText = opening != null
-          ? 'Locks ${formatLockDeadline(opening)}'
-          : 'Tap to edit before kickoff';
-      return _BannerCard(
-        accent: AppColors.primary,
+      return _CompactPill(
         icon: Icons.check_circle,
         iconColor: AppColors.primary,
-        title: 'Your tournament picks',
-        subtitle: lockText,
-        rightBadge: const _PointsBadge(points: 125, label: 'max'),
-        rows: [
-          _PickedRow(
-            label: 'Winner',
-            value: pickedTeam?.name ?? 'Tap to pick',
-            flagUrl: pickedTeam?.flagUrl,
-            placeholder: pickedTeam == null,
-            bonus: 75,
-            icon: Icons.flag_outlined,
-          ),
-          _PickedRow(
-            label: 'Golden Boot',
-            value: pickedPlayer?.name ?? 'Tap to pick',
-            placeholder: pickedPlayer == null,
-            bonus: 50,
-            icon: Icons.sports_soccer_outlined,
-          ),
-        ],
-        footerLabel: 'Tap to edit',
+        middle: _PicksLine(
+          teamName: pickedTeam?.name,
+          teamFlagUrl: pickedTeam?.flagUrl,
+          playerName: pickedPlayer?.name,
+          style: Theme.of(context).textTheme.bodyMedium,
+        ),
+        trailing: Text(
+          'Edit',
+          style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                color: AppColors.primary,
+                letterSpacing: 0.5,
+                fontWeight: FontWeight.w600,
+              ),
+        ),
+        onTap: () => context.push('/tournament'),
       );
     }
 
@@ -159,6 +122,156 @@ class TournamentAchievementBanner extends ConsumerWidget {
     return _CtaBanner(
       lockText: lockText,
       onTap: () => context.push('/tournament'),
+    );
+  }
+}
+
+// ─── Compact pill — used for states 2 (picked), 3 (locked), 4 (resolved) ───
+// Single row, ~52 px tall. State-specific differences are injected via
+// `icon` / `iconColor` (status glyph), `middle` (the picks line or a plain
+// label), and `trailing` (an "Edit" / "TBD" hint or a points badge). The
+// big CTA banner in `_CtaBanner` only renders for state 1 (no picks yet).
+
+class _CompactPill extends StatelessWidget {
+  const _CompactPill({
+    required this.icon,
+    required this.iconColor,
+    required this.middle,
+    required this.trailing,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final Color iconColor;
+  final Widget middle;
+  final Widget trailing;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+          AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.sm),
+      child: Material(
+        color: AppColors.surfaceHigh,
+        borderRadius: AppRadii.cardRadius,
+        child: InkWell(
+          borderRadius: AppRadii.cardRadius,
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: AppSpacing.md,
+              vertical: AppSpacing.sm,
+            ),
+            child: Row(
+              children: [
+                Icon(icon, size: 16, color: iconColor),
+                const SizedBox(width: AppSpacing.sm),
+                Expanded(child: middle),
+                const SizedBox(width: AppSpacing.sm),
+                trailing,
+                const SizedBox(width: 4),
+                const Icon(
+                  Icons.chevron_right,
+                  size: 18,
+                  color: AppColors.onSurfaceVariant,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Inline row "[flag] Team · Player" with each segment truncating
+/// independently when the row is narrow.
+class _PicksLine extends StatelessWidget {
+  const _PicksLine({
+    required this.teamName,
+    required this.teamFlagUrl,
+    required this.playerName,
+    required this.style,
+  });
+
+  final String? teamName;
+  final String? teamFlagUrl;
+  final String? playerName;
+  final TextStyle? style;
+
+  @override
+  Widget build(BuildContext context) {
+    final segments = <Widget>[];
+    if (teamName != null) {
+      segments.add(_TeamSegment(name: teamName!, flagUrl: teamFlagUrl, style: style));
+    }
+    if (playerName != null) {
+      if (segments.isNotEmpty) {
+        segments.add(Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 6),
+          child: Text(
+            '·',
+            style: style?.copyWith(color: AppColors.onSurfaceMuted),
+          ),
+        ));
+      }
+      segments.add(Flexible(
+        child: Text(
+          playerName!,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: style?.copyWith(color: AppColors.onSurface),
+        ),
+      ));
+    }
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: segments,
+    );
+  }
+}
+
+class _TeamSegment extends StatelessWidget {
+  const _TeamSegment({
+    required this.name,
+    required this.flagUrl,
+    required this.style,
+  });
+
+  final String name;
+  final String? flagUrl;
+  final TextStyle? style;
+
+  @override
+  Widget build(BuildContext context) {
+    return Flexible(
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (flagUrl != null && flagUrl!.isNotEmpty) ...[
+            ClipRRect(
+              borderRadius: BorderRadius.circular(2),
+              child: CachedNetworkImage(
+                imageUrl: flagUrl!,
+                width: 18,
+                height: 13,
+                fit: BoxFit.cover,
+                errorWidget: (_, __, ___) => const SizedBox(width: 18, height: 13),
+              ),
+            ),
+            const SizedBox(width: 6),
+          ],
+          Flexible(
+            child: Text(
+              name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: style?.copyWith(color: AppColors.onSurface),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -277,131 +390,15 @@ class _CtaBanner extends StatelessWidget {
     );
   }
 }
-// ─── Shared card for states 2/3/4 (picks submitted / locked / resolved) ──────
-
-class _BannerCard extends StatelessWidget {
-  const _BannerCard({
-    required this.accent,
-    required this.icon,
-    required this.iconColor,
-    required this.title,
-    required this.subtitle,
-    required this.rightBadge,
-    required this.rows,
-    this.footerLabel,
-  });
-
-  final Color accent;
-  final IconData icon;
-  final Color iconColor;
-  final String title;
-  final String subtitle;
-  final Widget rightBadge;
-  final List<Widget> rows;
-  final String? footerLabel;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(
-          AppSpacing.md, AppSpacing.md, AppSpacing.md, AppSpacing.sm),
-      child: Material(
-        color: AppColors.surfaceHigh,
-        borderRadius: AppRadii.cardRadius,
-        child: InkWell(
-          borderRadius: AppRadii.cardRadius,
-          onTap: () => GoRouterAccessor.push(context, '/tournament'),
-          child: Container(
-            padding: const EdgeInsets.all(AppSpacing.md),
-            decoration: BoxDecoration(
-              borderRadius: AppRadii.cardRadius,
-              border: Border(
-                left: BorderSide(color: accent, width: 4),
-              ),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: accent.withValues(alpha: 0.18),
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Icon(icon, color: iconColor, size: 22),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            title,
-                            style: theme.textTheme.titleMedium?.copyWith(
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                          Text(
-                            subtitle,
-                            style: theme.textTheme.labelSmall?.copyWith(
-                              color: AppColors.onSurfaceMuted,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    rightBadge,
-                  ],
-                ),
-                const SizedBox(height: 10),
-                for (final r in rows) ...[
-                  r,
-                  const SizedBox(height: 4),
-                ],
-                if (footerLabel != null) ...[
-                  const SizedBox(height: 2),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      Text(
-                        footerLabel!,
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          color: AppColors.primary,
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
-                      const SizedBox(width: 2),
-                      const Icon(Icons.chevron_right,
-                          size: 14, color: AppColors.primary),
-                    ],
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ─── Bonus chip with optional "label" prefix ─────────────────────────────────
+// ─── Bonus chip ─────────────────────────────────────────────────────────────
 
 class _PointsBadge extends StatelessWidget {
   const _PointsBadge({
     required this.points,
-    this.label,
-    this.big = false,
     this.positive = true,
   });
 
   final int points;
-  final String? label;
-  final bool big;
   final bool positive;
 
   @override
@@ -409,20 +406,15 @@ class _PointsBadge extends StatelessWidget {
     final theme = Theme.of(context);
     final bg = positive ? AppColors.primaryContainer : AppColors.surfaceHighest;
     final fg = positive ? AppColors.onPrimaryContainer : AppColors.onSurfaceMuted;
-    final text = label != null ? '$label +$points' : '+$points';
     return Container(
-      padding: EdgeInsets.symmetric(
-        horizontal: big ? 12 : 10,
-        vertical: big ? 6 : 4,
-      ),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
       decoration: BoxDecoration(
         color: bg,
         borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
-        text,
-        style: (big ? theme.textTheme.titleSmall : theme.textTheme.labelSmall)
-            ?.copyWith(
+        '+$points',
+        style: theme.textTheme.labelSmall?.copyWith(
           color: fg,
           fontWeight: FontWeight.w800,
           letterSpacing: 0.3,
@@ -432,183 +424,3 @@ class _PointsBadge extends StatelessWidget {
   }
 }
 
-// ─── A row in the submitted/locked state ─────────────────────────────────────
-
-class _PickedRow extends StatelessWidget {
-  const _PickedRow({
-    required this.label,
-    required this.value,
-    required this.bonus,
-    required this.icon,
-    this.flagUrl,
-    this.placeholder = false,
-  });
-
-  final String label;
-  final String value;
-  final int bonus;
-  final IconData icon;
-  final String? flagUrl;
-  final bool placeholder;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final color = placeholder
-        ? AppColors.onSurfaceMuted
-        : AppColors.onSurface;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceBase.withValues(alpha: 0.4),
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, size: 16, color: AppColors.onSurfaceMuted),
-          const SizedBox(width: 8),
-          if (flagUrl != null) ...[
-            CachedNetworkImage(
-              imageUrl: flagUrl!,
-              width: 22,
-              height: 15,
-              fit: BoxFit.cover,
-            ),
-            const SizedBox(width: 8),
-          ],
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: AppColors.onSurfaceMuted,
-                  ),
-                ),
-                Text(
-                  value,
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    color: color,
-                    fontWeight: placeholder ? FontWeight.w500 : FontWeight.w700,
-                    fontStyle: placeholder ? FontStyle.italic : FontStyle.normal,
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            ),
-          ),
-          Text(
-            '+$bonus',
-            style: theme.textTheme.labelMedium?.copyWith(
-              color: placeholder ? AppColors.onSurfaceMuted : AppColors.primary,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ─── A row in the resolved state — shows actual + user's pick + hit/miss ────
-
-class _ResolvedRow extends StatelessWidget {
-  const _ResolvedRow({
-    required this.label,
-    required this.actualName,
-    required this.hit,
-    required this.bonus,
-    this.actualFlag,
-    this.pickedName,
-  });
-
-  final String label;
-  final String actualName;
-  final String? actualFlag;
-  final String? pickedName;
-  final bool hit;
-  final int bonus;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final accent = hit ? AppColors.primary : AppColors.onSurfaceMuted;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-      decoration: BoxDecoration(
-        color: AppColors.surfaceBase.withValues(alpha: 0.4),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: hit ? AppColors.primary.withValues(alpha: 0.3) : AppColors.outline,
-        ),
-      ),
-      child: Row(
-        children: [
-          Icon(
-            hit ? Icons.check_circle : Icons.cancel_outlined,
-            size: 18,
-            color: accent,
-          ),
-          const SizedBox(width: 8),
-          if (actualFlag != null) ...[
-            CachedNetworkImage(
-              imageUrl: actualFlag!,
-              width: 22,
-              height: 15,
-              fit: BoxFit.cover,
-            ),
-            const SizedBox(width: 8),
-          ],
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  label,
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: AppColors.onSurfaceMuted,
-                  ),
-                ),
-                RichText(
-                  overflow: TextOverflow.ellipsis,
-                  text: TextSpan(
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      fontWeight: FontWeight.w700,
-                    ),
-                    children: [
-                      TextSpan(text: actualName),
-                      if (pickedName != null && !hit)
-                        TextSpan(
-                          text: '  · picked $pickedName',
-                          style: theme.textTheme.labelSmall?.copyWith(
-                            color: AppColors.onSurfaceMuted,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          Text(
-            hit ? '+$bonus' : '+0',
-            style: theme.textTheme.titleSmall?.copyWith(
-              color: accent,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// Helper so the _BannerCard's onTap doesn't require importing go_router here.
-// (Simplifies callers — the InkWell needs *some* router access.)
-class GoRouterAccessor {
-  static void push(BuildContext context, String path) {
-    context.push(path);
-  }
-}

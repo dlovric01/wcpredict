@@ -2,14 +2,14 @@
 
 ## Project Overview
 
-**wcpredict** is a Flutter mobile app for the 2026 FIFA World Cup prediction game. Users submit score predictions before kickoff, earn points for accuracy, and compete in private groups on a shared leaderboard.
+**wcpredict** is a Flutter mobile app for the 2026 FIFA World Cup prediction game. Users submit score predictions before kickoff, earn points for accuracy, and compete in private invite-code groups on a shared leaderboard.
 
-**Scoring rules** (canonical source: `rules.md`). Match-result categories are **mutually exclusive** — only the highest matching one is awarded:
+**Canonical scoring rules** live in `rules.md` and `lib/core/scoring_rules.dart` (mirrored in SQL migrations). Match-result categories are **mutually exclusive** — only the highest-matching one is awarded:
 
 | Match-result category | Points |
 |---|---|
 | Exact score | 5 |
-| Correct goal difference (\|GD\| ≥ 2) | 3 |
+| Correct goal difference | 3 |
 | Correct outcome (W/D/L) | 2 |
 | Wrong / no prediction | 0 |
 
@@ -17,11 +17,14 @@ Two independent additive bonuses:
 
 | Bonus | Points | Condition |
 |---|---|---|
-| First team to score | 2 | Picked team scores the first regular-time non-OG, non-shootout goal (minute ≤ 90) |
-| Goalscorer | 8 | Selected player scored ≥1 non-own-goal in regulation time |
+| First team to score | 2 | Picked team scores first regular-time, non-OG, non-shootout goal (≤ 90′) |
+| Goalscorer | 8 | Picked player scores ≥1 non-own-goal in regulation |
 
-**Max per match (base) = 5 + 2 + 8 = 15.** Knockout rounds apply manual booster multipliers (R32 ×2, R16 ×3, QF ×4, SF ×5) or automatic multipliers (3rd Place ×5, Final ×6). Tournament-level bonuses are added separately: World Cup Winner = 75, Golden Boot = 50 (max +125 across the tournament).
-Backend: Supabase (PostgreSQL 17 + Auth + Realtime). Authentication via Apple Sign-In (iOS) and Google Sign-In. Match data is synced from **api-sports.io** (`v3.football.api-sports.io`) via Deno v2 edge functions on cron schedules. Predictions lock automatically at kickoff; scoring fires via a PostgreSQL trigger when a match reaches `final` status.
+**Base max per match = 5 + 3* + 2 = 15** (*goalscorer counted in base via 8, not separate; full max = 5 + 2 + 8). Knockout multipliers (manual boosters R32 ×2, R16 ×3, QF ×4, SF ×5; automatic 3rd ×5, Final ×6) multiply the entire per-match total. Tournament-level bonuses: WC Winner = 75, Golden Boot = 50 (max +125).
+
+Backend: Supabase (PostgreSQL 17 + Auth + Realtime). Auth: native Apple Sign-In (iOS) + Google Sign-In with ID-token exchange to Supabase. Match data syncs from **api-sports.io** via **Deno v2** edge functions. Predictions lock at kickoff; scoring fires via PostgreSQL triggers when a match reaches `final` (re-fires on event delete / booster change).
+
+Push: Firebase Cloud Messaging (FCM) — Firebase is configured **only for FCM**, not for auth/storage/analytics.
 
 ---
 
@@ -29,33 +32,36 @@ Backend: Supabase (PostgreSQL 17 + Auth + Realtime). Authentication via Apple Si
 
 ```
 api-sports.io
-    ↓ (cron → Deno v2 edge functions)
+    ↓ (cron → Deno v2 edge functions in supabase/functions/)
 PostgreSQL 17 (Supabase)
-  matches, match_events, teams, players
-  predictions (locked at kickoff)
-  compute_match_scoring() trigger (fires on status → 'final'; re-fires on event delete for VAR)
-  group_standings (materialized view, refreshed per final)
-    ↓ (Supabase Realtime — WebSocket)
+  matches, match_events, match_lineups, teams, players
+  predictions, round_boosters, tournament_predictions, tournament_results
+  device_tokens, prediction_reminders_sent
+  compute_match_scoring() trigger (fires on status → 'final';
+    re-fires on event delete (037) and booster change (038))
+  group_standings (materialized view; refreshed per final)
+    ↓ (Supabase Realtime + REST)
 Flutter Client
-  flutter_riverpod — state (FutureProvider / StreamProvider)
-  go_router — navigation with auth guard + StatefulShellRoute 5-tab nav
-  supabase_flutter — queries + social auth (Apple/Google)
-  talker_flutter — structured logging
+  flutter_riverpod 2.6.1   — providers (Future/Stream/Provider, family, autoDispose)
+  go_router 14.8.1         — auth guard + StatefulShellRoute (3 tabs)
+  supabase_flutter 2.12.4  — queries + native social auth
+  firebase_messaging 15.2.10 + firebase_core 3.15.2 — FCM only
+  talker_flutter 5.1.16    — structured logging (500-item ring buffer, on in release)
 ```
 
 ### Flutter Layer Separation
 
 | Layer | Path | Responsibility |
 |---|---|---|
-| Entry / Bootstrap | `lib/main.dart` | Init Supabase, wire Talker error handlers, `ProviderScope` → `runApp` |
-| Root Widget | `lib/app.dart` | `MaterialApp.router`, `TalkerWrapper`, `appTheme`, draggable `_LogFab` |
-| Routing | `lib/router.dart` | GoRouter + auth redirect guard + `StatefulShellRoute.indexedStack` 5-tab nav |
-| Core | `lib/core/` | Models, `AuthRepository` (Apple/Google Sign-In), Supabase singleton, env constants, logger, theme |
-| Shared | `lib/shared/` | Cross-feature Riverpod providers and reusable widgets |
-| Features | `lib/features/<name>/` | Screen widgets, local providers, modals — scoped to feature |
-| Backend | `supabase/` | Migrations, edge functions, seed data |
+| Entry / Bootstrap | `lib/main.dart` | initSupabase(), Talker error handlers, optional `DEV_AUTOLOGIN_USER` / `DEV_INITIAL_ROUTE`, `ProviderScope` → `runApp` |
+| Root | `lib/app.dart` | `MaterialApp.router`, `appTheme`, global `appMessengerKey`, Talker log FAB |
+| Routing | `lib/router.dart` + `lib/router_redirect.dart` | GoRouter, auth redirect, `StatefulShellRoute.indexedStack` (3 tabs), `/dev/*` debug routes |
+| Core | `lib/core/` | Models, theme, `AuthRepository`, Supabase client, `PushNotifications`, logger, env, scoring constants |
+| Shared | `lib/shared/` | Cross-feature providers, widgets, utils |
+| Features | `lib/features/<name>/` | Screen widgets + colocated `_logic.dart` / `_helpers.dart` pure files |
+| Backend | `supabase/` | 38 migrations + 7 edge functions |
 
-**Data mutations** bypass providers: call `supabase.from(table).upsert(data)` directly in an event handler, then `ref.invalidate(provider)` to force a re-fetch.
+**Data mutations** bypass providers: call `supabase.from(...)` (or `.functions.invoke(...)`) directly in an event handler, then `ref.invalidate(provider)` to force a re-fetch. Realtime overlays (`liveMatchProvider`, `matchEventsStreamProvider`) merge with one-shot baselines via `mergeWithLive()` so score ticks never refetch entire lists.
 
 ---
 
@@ -63,60 +69,94 @@ Flutter Client
 
 ```
 lib/
-  main.dart                  — entry: init Supabase + Talker, ProviderScope, runApp
-  app.dart                   — MaterialApp.router; TalkerWrapper; draggable log FAB
-  router.dart                — GoRouter: auth guard, StatefulShellRoute (5 tabs),
-                               detail routes /matches/:matchId /groups/:groupId
-                               /members/:userId /dev/simulate
+  main.dart                  — Supabase + Talker bootstrap, debug auto-login overrides
+  app.dart                   — WcPredictApp; MaterialApp.router; log FAB
+  router.dart                — appRouter; GoRouterRefreshStream; /dev/* routes guarded by kDebugMode
+  router_redirect.dart       — computeAuthRedirect; publicRoutes = {'/sign-in', '/auth/callback'}
+  firebase_options.dart      — generated by FlutterFire CLI (FCM only)
   core/
-    env.dart                 — Env.supabaseUrl / Env.supabaseAnonKey (--dart-define)
-    supabase_client.dart     — initSupabase(), global `supabase` getter
-    auth_repository.dart     — sendMagicLink, signOut, updateDisplayName, authStateChanges
-    logger.dart              — global `talker` (TalkerFlutter, 500-item ring buffer)
-    models/                  — data models (fromJson/toJson, const constructors)
-    theme/
-      app_colors.dart        — "Stadium Night" dark palette + ColorScheme + forPosition()
-      app_theme.dart         — ThemeData (Material3 dark) built from AppColors + Google Fonts
-      app_typography.dart    — text styles
-      app_spacing.dart       — spacing constants
-      app_radii.dart         — border radius constants
-      app_motion.dart        — animation durations/curves
+    env.dart                 — Env.supabaseUrl / Env.supabaseAnonKey / GOOGLE_SERVER_CLIENT_ID / IOS_REVERSED_CLIENT_ID
+    supabase_client.dart     — initSupabase(), global `supabase` getter; LoggingHttpClient wired
+    auth_repository.dart     — signInWithApple/Google, signOut, updateDisplayName,
+                               _ensureProfile, _registerPushForCurrentUser
+    logger.dart              — global `talker` (TalkerFlutter; 500-item ring buffer; on in release)
+    scoring_rules.dart       — kPoints* + kBoosterMultipliers + kAutoMultipliers (single source of truth)
+    legal_urls.dart          — Privacy / Terms / Support GitHub Pages URLs
+    push_notifications.dart  — FCM lifecycle; abstract FcmGateway; @pragma('vm:entry-point') bg handler
+    http_logger.dart         — LoggingHttpClient (strips Authorization/apikey before logging)
+    route_observer.dart      — AppRouteObserver (logs nav)
+    provider_observer.dart   — AppProviderObserver (logs provider lifecycle)
+    models/                  — 11 models, value-equal, fromJson/toJson, computed getters on model
+    theme/                   — app_colors / app_typography / app_spacing / app_radii / app_motion / app_theme
   shared/
-    providers/               — auth_provider, matches_provider, match_detail_provider,
-                               predictions_provider, groups_provider, mock_bracket
-    widgets/                 — match_card, team_flag, app_shell, app_logo,
-                               countdown_pill, verdict_pill
+    providers/               — auth, matches, match_detail, predictions, match_predictions,
+                               groups, tournament, boosters, providers (barrel), mock_bracket
+    widgets/                 — match_card, app_shell (3-tab NavigationBar), app_feedback,
+                               app_sheet (showAppSheet), verdict_pill, team_flag, app_logo, countdown_pill
+    utils/                   — date_format, score_format (NBSP+en-dash separator), player_name_format,
+                               live_minute (broadcast-minute label from api-sports period fields)
   features/
-    auth/                    — social_sign_in_screen, auth_callback_screen
-    groups/                  — groups_list, group_detail, create_group, join_group,
-                               user_predictions_screen,
-                               invite_code.dart  (kInviteCodeLength + generateInviteCode),
-                               group_name.dart   (validateGroupName helper)
-    matches/                 — match_detail_screen, live_events_widget,
-                               matches_list_screen, tournament_achievement_banner,
-                               predict_logic.dart (predictTabLocked + sanitisePredictionPicks)
-    tournament/              — tournament_predictions_screen
-    live/                    — live_screen (live tab; uses Realtime stream)
-    profile/                 — profile_screen
-    dev/                     — simulation_screen (/dev/simulate — dev-only)
+    auth/                    — social_sign_in_screen, auth_callback_screen, auth_callback_helpers
+    matches/                 — matches_list_screen, match_detail_screen,
+                               predict_logic, booster_logic, live_scoring, teams_tab_logic,
+                               first_team_picker, live_events_widget, live_events_format,
+                               matches_filter, tournament_achievement_banner
+    groups/                  — groups_list_screen, group_detail_screen,
+                               create_group_screen, join_group_screen, user_predictions_screen,
+                               invite_code (kInviteCodeLength=8, generateInviteCode),
+                               group_name (kGroupNameMinLength=2, kGroupNameMaxLength=40, validateGroupName)
+    tournament/              — tournament_predictions_screen (WC winner + Golden Boot pickers)
+    profile/                 — profile_screen (display-name edit, stats, legal tiles, sign-out)
+    rules/                   — rules_screen (canonical rules surface with deep-link anchors)
+    dev/                     — simulation_screen, matches_preview_screen, predictions_preview_screen
+                               (all gated by kDebugMode in router)
 
 supabase/
-  migrations/                — 001–022 ordered SQL migrations (latest: first-team-to-score)
-  functions/                 — Deno v2 edge functions
-    poll_fixtures/           — daily sync of all fixtures + teams (api-sports.io)
-    poll_live_matches/       — every 1 min; updates scores + events
-    poll_lineups/            — self-gates 25–35 min before kickoff
-    lock_predictions/        — every 30 min; locks predictions at kickoff
-    compute_scoring/         — manual scoring trigger (edge function wrapper)
-    test_api/                — api-sports.io connectivity test
-    _shared/                 — cors.ts, supabase.ts helpers
+  config.toml                — PG17; API 54321 / DB 54322 / Studio 54323; edge_runtime deno_version=2, policy=per_worker
+  migrations/                — 38 ordered SQL files (001–038); see "Migration Highlights" below
+  functions/                 — Deno v2 edge functions:
+    _shared/                 — cors.ts, supabase.ts
+    poll_fixtures/           — daily sync of fixtures + teams
+    poll_live_matches/       — every 1 min; scores + events
+    poll_lineups/            — self-gates ~25–35 min before kickoff
+    lock_predictions/        — locks predictions at kickoff
+    notify_predict_reminders/— pre-kickoff FCM nudge (uses prediction_reminders_sent)
+    test_api/                — api-sports.io connectivity probe
   seed/
-    teams.sql                — 48 teams
-    cron_schedule.sql        — cron schedule template
-    dev_seed.js              — dev data seeding (Node/Deno compatible)
+    teams.sql                — 48 teams (loaded by `supabase db reset`)
+    dev_seed.js              — dev fixture seeding (Node/Deno compatible)
     simulate_live.sql        — live-match simulation SQL
-  config.toml                — local dev config (ports, PostgreSQL 17, Deno v2)
+    cron_schedule.sql        — cron schedule template
+
+test/
+  models/                    — 11 files, 70 tests (JSON round-trip + computed getters)
+  widgets/                   — 6 files, 47 tests
+  features/                  — 14 files, 165 tests (pure logic + provider tests)
+  core/                      — 2 files, 23 tests (push notifications + scoring rules invariants)
+  shared/                    — 4 files, 58 tests (formatters + live providers)
+  regression/                — Bun + bun:test against a live Supabase project (144 tests, 18 suites)
 ```
+
+### Migration Highlights (`supabase/migrations/`)
+
+| Migration | Purpose |
+|---|---|
+| `001_initial_schema.sql` | Tables + `compute_match_scoring()` |
+| `006_fix_rls_recursion.sql` | `is_group_member()` SECURITY DEFINER (breaks RLS recursion) |
+| `009_simulation_rpc.sql` / `010_update_simulation.sql` / `027_restrict_simulate_rpc.sql` | `simulate_live_match(step_num int)` dev RPC + lockdown |
+| `012_knockout_boosters.sql` | `round_boosters` table + multipliers |
+| `017_rules_md_scoring.sql` | Mutually-exclusive match scoring (5/3/2) + GS=8 |
+| `018_tournament_predictions.sql` | WC winner + Golden Boot picks + `tournament_results` mirror |
+| `019_group_standings_v3.sql` | Materialized leaderboard view incl. tournament bonus |
+| `022_first_team_to_score.sql` | `predicted_first_team_id` + `points_first_team` + validation triggers |
+| `023_first_team_count_tiebreaker.sql` | Tiebreaker counts include first-team hits |
+| `024_find_group_by_invite.sql` | `find_group_by_invite_code()` RPC |
+| `026_live_minute_columns.sql` | Adds api-sports period/minute fields to `matches` |
+| `032_device_tokens.sql` | FCM device-token registry |
+| `033_prediction_reminders_sent.sql` + `034_cron_predict_reminders.sql` | Pre-kickoff FCM nudges |
+| `036_match_lineups.sql` | Per-match lineup table |
+| `037_recompute_scoring_on_event_change.sql` | VAR re-scoring trigger |
+| `038_booster_change_recomputes_scoring.sql` | Booster reassignment re-scores affected matches |
 
 ---
 
@@ -124,52 +164,53 @@ supabase/
 
 ### Running the App
 
-The app requires Supabase credentials injected at build time via `--dart-define`. Use `run.sh` which reads from `.env`:
+Secrets are injected at build time via `--dart-define` from `.env`. Use `run.sh`:
 
 ```bash
-# .env:
-# SUPABASE_URL=https://<ref>.supabase.co
-# SUPABASE_ANON_KEY=<anon-key>
+# .env (see .env.example):
+# SUPABASE_URL, SUPABASE_ANON_KEY, GOOGLE_SERVER_CLIENT_ID, IOS_REVERSED_CLIENT_ID
 
-./run.sh                     # debug on connected device
-./run.sh --release           # release build
-./run.sh --profile           # profile mode
-./run.sh -d <device-id>      # target specific device
+./run.sh                          # debug on auto-selected device
+./run.sh --release                # release
+./run.sh --profile                # profile
+./run.sh -d "iPhone 16"           # target specific device
+./run.sh --release -d "iPhone 16" # combine
 ```
 
-Manual equivalent:
+VS Code `launch.json` provides 4 Dart configs that all use `--dart-define-from-file=.env`.
+
+### Build & Distribute
 
 ```bash
-flutter run \
-  --dart-define=SUPABASE_URL=https://... \
-  --dart-define=SUPABASE_ANON_KEY=...
+./build.sh                # Android APKs, --split-per-abi by default
+./build.sh --universal    # universal fat APK
+./build.sh --arm64        # arm64-only fat APK
+./build_apk.sh            # simpler APK builder (debug/release/profile flag)
+./build_aab.sh            # Signed Android App Bundle for Play (also needs APP_LINK_DOMAIN)
+./archive.sh              # iOS .ipa + .xcarchive (copied to Xcode Organizer)
+./archive.sh --no-codesign
 ```
 
-### Build
-
-```bash
-flutter build apk  --dart-define=SUPABASE_URL=... --dart-define=SUPABASE_ANON_KEY=...
-flutter build ios  --dart-define=SUPABASE_URL=... --dart-define=SUPABASE_ANON_KEY=...
-```
+All scripts read the same `.env` variables as `run.sh`.
 
 ### Tests & Lint
 
 ```bash
-flutter test                 # smoke test (test/widget_test.dart)
-flutter analyze              # static analysis via flutter_lints
+flutter test              # Pure Dart unit + widget tests — no Supabase needed (~363 tests, ~5s)
+flutter analyze           # flutter_lints (default profile, no overrides)
 
-# Regression suite (requires live Supabase instance; credentials in test/regression/helpers.ts)
+# Regression suite (requires a Supabase instance; defaults to live project in helpers.ts)
 cd test/regression
-bun install                  # first time only
-bun test                     # 51 tests across 8 suites
+bun install               # first time
+bun test                  # 144 tests across 18 describe blocks
 ```
 
 ### Supabase Local Dev
 
 ```bash
-supabase start                                       # API :54321, DB :54322, Studio :54323
-supabase db reset                                    # reset + all migrations + seed teams.sql
-supabase db push                                     # apply pending migrations to remote
+supabase start            # API :54321, DB :54322, Shadow :54320, Studio :54323
+supabase db reset         # apply 001–038 + seed teams.sql
+supabase db push          # push pending migrations to remote
 supabase functions deploy <name> --no-verify-jwt
 supabase secrets set APISPORTS_KEY=<key>
 ```
@@ -181,11 +222,10 @@ flutter pub get
 flutter pub upgrade
 ```
 
-Code generation (staged, not active — no `@riverpod` sources):
+Code generation (staged but inactive — no `@riverpod` sources today):
 
 ```bash
 dart run build_runner build
-dart run build_runner watch
 ```
 
 ---
@@ -196,49 +236,29 @@ dart run build_runner watch
 
 | Construct | Convention | Example |
 |---|---|---|
-| Classes | PascalCase | `MatchModel`, `HomeScreen`, `AuthRepository` |
+| Classes | PascalCase | `MatchModel`, `MatchesListScreen`, `AuthRepository` |
 | Files | snake_case | `match_model.dart`, `social_sign_in_screen.dart` |
-| Private widgets (in-file) | `_ClassName` | `_TeamSide`, `_ScorePicker` |
-| Providers | camelCase + `Provider` suffix | `allMatchesProvider`, `myPredictionProvider` |
-| Methods | camelCase | `signInWithApple`, `signInWithGoogle` |
-| JSON → Dart | snake_case → camelCase | `team1_id` → `team1Id` |
+| Private widgets (in-file) | `_ClassName` | `_TeamSide`, `_ScorePicker`, `_HeroScoreCard` |
+| Providers | camelCase + `Provider` suffix | `allMatchesProvider`, `liveMatchProvider` |
+| Constants | `kCamelCase` | `kPointsExact`, `kInviteCodeLength`, `kScoreSeparator` |
+| JSON → Dart | snake_case → camelCase | `predicted_first_team_id` → `predictedFirstTeamId` |
 
 ### Models (`lib/core/models/`)
 
-```dart
-class MatchModel {
-  const MatchModel({required this.id, this.status, ...});
+- `const` constructors throughout, full `==`/`hashCode` (Riverpod dedupe relies on it).
+- `fromJson`: nullable casts, numerics via `(json['x'] as num).toInt()` to defend against doubles.
+- `toJson`: excludes nested relations (joins come from PostgREST `select('*, team1:teams(*)')`).
+- **Computed getters live on the model**, never in UI:
+  - `MatchModel`: `isLocked`, `isKnockout`, `isBoosterRound`, `autoMultiplier`, `boosterMultiplier`, `copyWith`
+  - `PredictionModel`: `basePoints`, `isExact`, `isGoalDiff`, `isOutcome`, `goalscorerHit`, `firstTeamHit`
+  - `MatchEventModel`: `minuteLabel` (e.g. `"90+3'"`)
+  - `TournamentResultsModel`: `hasWinner`, `hasGoldenBoot`, `isFinalised`
 
-  final int id;
-  final String? status;
+### State Management (Riverpod, manual)
 
-  factory MatchModel.fromJson(Map<String, dynamic> json) => MatchModel(
-        id: (json['id'] as num).toInt(),
-        status: json['status'] as String?,
-        // DateTime: DateTime.parse(json['kickoff_time'] as String)
-        // Nested: TeamModel.fromJson(json['team1'] as Map<String, dynamic>)
-      );
-
-  Map<String, dynamic> toJson() => {'id': id, 'status': status};
-
-  // Computed getter (not serialized):
-  bool get isLocked => status == 'live' || status == 'final' || DateTime.now().isAfter(kickoffTime);
-}
-```
-
-- `const` constructors throughout.
-- `fromJson`: nullable fields with `as Type?`, numerics with `.toInt()`.
-- `toJson`: excludes nested objects (they come from joins; written separately).
-- Computed getters (e.g., `isLocked`) belong on models, not in UI.
-
-Key models: `MatchModel` (nested `team1`/`team2`, `isLocked` getter combining status + wall-clock kickoff), `PredictionModel` (score + `predictedFirstTeamId` + `predictedScorerId`; per-category `pointsMatch` / `pointsFirstTeam` / `pointsGoalscorer`; computed `basePoints` = 0..15, `isExact`/`isGoalDiff`/`isOutcome`, `firstTeamHit`, `goalscorerHit`), `TeamModel` (id, name, code, flagUrl, groupLetter, optional players join), `GroupModel` + `GroupMemberModel`, `GroupStandingModel` (leaderboard view; tiebreaker counts `exactCount`/`goalDiffCount`/`outcomeCount`/`scorerCount` and `earliestSubmission`), `PlayerModel` (grid `'row:col'`, isStarter, position, jerseyNumber), `MatchEventModel` (minute, minuteExtra, type goal/card/sub/shootout_kick, teamId, playerId, detail; `minuteLabel` getter for "90+3'" formatting), `ProfileModel`, `RoundBoosterModel` (one per user per knockout round), `TournamentPredictionModel` (WC winner + Golden Boot), `TournamentResultsModel` (single-row admin table; `hasWinner`/`hasGoldenBoot`/`isFinalised` flags).
-
-### State Management (Riverpod)
-
-Shared providers live in `lib/shared/providers/`; feature-local providers are private (inline in the screen file).
+Shared providers in `lib/shared/providers/`; feature-local providers stay private (inline in screen files like `_myProfileProvider`, `_myStatsProvider`).
 
 ```dart
-// Shared provider
 final allMatchesProvider = FutureProvider<List<MatchModel>>((ref) async {
   final data = await supabase
       .from('matches')
@@ -247,25 +267,29 @@ final allMatchesProvider = FutureProvider<List<MatchModel>>((ref) async {
   return data.map(MatchModel.fromJson).toList();
 });
 
-// Parameterized (family)
-final matchByIdProvider = FutureProvider.family<MatchModel, int>((ref, id) async { ... });
-
-// Widget consumption
-class HomeScreen extends ConsumerWidget {
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final matches = ref.watch(allMatchesProvider);
-    return matches.when(
-      loading: () => const _ShimmerList(),
-      error: (e, _) => _ErrorTile(e),
-      data: (list) => _MatchList(list),
-    );
-  }
-}
+final matchByIdProvider = FutureProvider.autoDispose
+    .family<MatchModel, int>((ref, id) async { ... });
 ```
 
-- `ref.watch()` to subscribe; `ref.invalidate(provider)` to force re-fetch after mutation.
-- Riverpod code generation (`@riverpod`, `riverpod_generator`) is **staged but not active** — all providers are defined manually. Do not add generated providers without activating `build_runner`.
+- `ref.watch()` to subscribe; `ref.invalidate(provider)` after a mutation.
+- `.select((m) => m.field)` and full-object `==` minimize rebuilds during realtime ticks.
+- `_liveMatchesMapProvider` is a single Supabase Realtime stream (6h rolling window) fanned out to per-match `liveMatchProvider.family<int>`.
+- `riverpod_generator` is in `dev_dependencies` but **no `@riverpod` annotations exist** — running `build_runner` is currently a no-op.
+
+### Pure Logic Extraction
+
+Screens with non-trivial logic ship a sibling pure-Dart helper file. Test the helper, not the widget:
+
+- `lib/features/matches/predict_logic.dart` — `predictTabLocked`, `sanitisePredictionPicks`
+- `lib/features/matches/booster_logic.dart` — `kBoosterRoundsInOrder`, `activeBoosterRound`, `allGroupStageFinal`
+- `lib/features/matches/live_scoring.dart` — Dart mirror of `compute_match_scoring()`
+- `lib/features/matches/teams_tab_logic.dart` — `teamsTabLineupReady`
+- `lib/features/matches/matches_filter.dart` — `buildDayWindow`, `filterMatchesByDay`
+- `lib/features/matches/live_events_format.dart` — icon/color/label mappers
+- `lib/features/auth/auth_callback_helpers.dart` — `parseOtpType`, `friendlyAuthError`
+- `lib/features/groups/invite_code.dart`, `group_name.dart`
+
+When you need to expose logic from a private widget, **extract a top-level public helper** rather than making the widget public.
 
 ### Async / Error Handling
 
@@ -275,58 +299,48 @@ Future<void> _submit() async {
   try {
     await supabase.from('predictions').upsert({...}, onConflict: 'user_id,match_id');
     ref.invalidate(myPredictionProvider(widget.matchId));
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(...);
+    if (mounted) AppFeedback.success(context, 'Saved');
   } catch (e) {
-    if (mounted) ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(e.toString()), backgroundColor: theme.colorScheme.error),
-    );
+    talker.handle(e);
+    if (mounted) AppFeedback.error(context, e.toString());
   } finally {
     if (mounted) setState(() => _loading = false);
   }
 }
 ```
 
-- Always guard `setState`/`ScaffoldMessenger` with `if (mounted)`.
-- Disable submit buttons while `_loading` to prevent double-submission.
-- Use Shimmer as loading placeholder; empty-state widget for no-data; error widget with retry for failures.
+- Always guard `setState` / messenger calls with `if (mounted)`.
+- Use `AppFeedback.success/error/info(context, ...)` from `lib/shared/widgets/app_feedback.dart` (attached via global `appMessengerKey`) — survives `context.go()` transitions.
+- Loading: Shimmer placeholders; empty state widgets; explicit retry on error.
 
-### Widget Composition
+### Routing (`lib/router.dart`)
 
-Large screens decompose into private helper widgets in the same file:
+| Surface | Path |
+|---|---|
+| Public | `/`, `/sign-in`, `/auth/callback` |
+| Shell tabs (`StatefulShellRoute.indexedStack` → `AppShell`) | `/matches`, `/groups`, `/profile` |
+| Detail (push, with back button) | `/matches/:matchId?tab=`, `/groups/:groupId`, `/members/:userId` (needs `extra`), `/rules`, `/tournament` |
+| Dev-only (`kDebugMode`) | `/dev/simulate`, `/dev/matches-preview?scenario=`, `/dev/predictions-preview?scenario=` |
 
-```dart
-class MatchCard extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) => Column(children: [
-    _TeamSide(team: match.team1),
-    _CentreScore(match: match),
-    _TeamSide(team: match.team2),
-  ]);
-}
-class _TeamSide extends StatelessWidget { ... }
-class _CentreScore extends StatelessWidget { ... }
-```
+`computeAuthRedirect` in `router_redirect.dart` is pure-Dart and unit-tested: unauthenticated → `/sign-in`; authenticated on `/` or `/sign-in` → `/matches`.
 
-### Theme
+### Theme (`lib/core/theme/`)
 
-Dark-only "Stadium Night" palette defined in `lib/core/theme/app_colors.dart`. **Never use `Colors.X` hardcoded values outside that file.**
+Dark-only "Stadium Night" palette. **Never use `Colors.X` outside `app_colors.dart`.**
 
 | Token | Value | Usage |
 |---|---|---|
-| `primary` | `#00C566` (Pitch Emerald) | CTAs, active states |
-| `secondary` | `#FFB627` (Goal Amber) | highlights, badges |
-| `tertiary` | `#5A8DFF` (Sky Cobalt) | info, links |
-| `surfaceBase` | `#0A0E1A` | app background |
-| `surfaceHighest` | `#232C49` | modal sheets |
+| `primary` | `#00C566` (Pitch Emerald) | CTAs, success |
+| `secondary` | `#FFB627` (Goal Amber) | Highlights |
+| `tertiary` | `#5A8DFF` (Sky Cobalt) | Links/info |
+| `error` | `#FF5C5C` | Errors |
+| `live` | `#FF3B5C` | Live state |
+| `surfaceBase` | `#0A0E1A` | App background |
+| `surface` / `surfaceHigh` / `surfaceHighest` | `#11162A` / `#1A2138` / `#232C49` | Layered cards/sheets |
+| `gold` / `silver` / `bronze` | `#FFD15A` / `#C9D4E8` / `#E89968` | Standings |
+| `positionGk/Def/Mid/Fwd` | `#FFD15A` / `#5A8DFF` / `#00C566` / `#FF6B6B` | Player chips (`AppColors.forPosition`) |
 
-`AppColors.forPosition(position)` returns a color for GK/DEF/MID/FWD player indicators.
-
-### Routing (GoRouter)
-
-- Auth redirect in `router.dart`: unauthenticated → `/sign-in`; authenticated at `/sign-in` → `/home`.
-- `_publicRoutes = {'/sign-in', '/auth/callback'}`.
-- Bottom nav: `StatefulShellRoute.indexedStack` — home, fixtures, groups, bracket, profile.
-- Navigate: `context.go('/home')`, `context.push('/matches/:matchId')`.
+Typography (`app_typography.dart`) uses Google Fonts **Inter** with `FontFeature.tabularFigures()` on display/headline sizes so scores align. Spacing/radii/motion live in their own files.
 
 ### Supabase Queries
 
@@ -335,19 +349,18 @@ supabase
   .from('matches')
   .select('*, team1:teams!matches_team1_id_fkey(*), team2:teams!matches_team2_id_fkey(*)')
   .eq('status', 'scheduled')
-  .order('kickoff_time')
+  .order('kickoff_time');
+
+// Predictions:
+await supabase.from('predictions').upsert({...}, onConflict: 'user_id,match_id');
 ```
 
-- `.maybeSingle()` when result may be null; `.single()` only when row is guaranteed.
-- Upsert predictions: `.upsert({...}, onConflict: 'user_id,match_id')`.
+- `.maybeSingle()` for nullable; `.single()` only when the row is guaranteed.
+- Opponent predictions are RLS-filtered: queries use `locked_at IS NOT NULL` (see `match_predictions_provider.dart`).
 
 ### Logging
 
-Global `talker` (500-item ring buffer) from `lib/core/logger.dart`. `app.dart` wraps the widget tree in `TalkerWrapper`; `FlutterError.onError` and `runZonedGuarded` route all errors through it. The draggable `_LogFab` opens `TalkerScreen` in-app (dev builds).
-
-### Dev / Mock Toggle
-
-`kUseMockData` flag gates mock data paths. `/dev/simulate` (`features/dev/simulation_screen.dart`) drives the `simulate_live_match(step_num int)` SECURITY DEFINER RPC (migration 009) for UI testing without a live match.
+Global `talker` (`lib/core/logger.dart`) — 500-item ring buffer, **enabled in release**. `LoggingHttpClient` intercepts all Supabase HTTP traffic and strips `Authorization`/`apikey` headers before emitting. `AppRouteObserver` + `AppProviderObserver` route nav + provider lifecycle events. `_LogFab` (draggable) opens `TalkerScreen` in-app.
 
 ---
 
@@ -355,57 +368,53 @@ Global `talker` (500-item ring buffer) from `lib/core/logger.dart`. `app.dart` w
 
 | File | Purpose |
 |---|---|
-| `lib/main.dart` | Entry: init Supabase + Talker → `ProviderScope` → `runApp` |
-| `lib/app.dart` | `MaterialApp.router` + `TalkerWrapper` + `appTheme` + log FAB |
-| `lib/router.dart` | All routes + auth redirect guard + 5-tab `StatefulShellRoute` |
-| `lib/core/env.dart` | `Env.supabaseUrl` / `Env.supabaseAnonKey` (build-time `--dart-define`) |
-| `lib/core/supabase_client.dart` | `initSupabase()`, global `supabase` getter |
-| `lib/core/auth_repository.dart` | Apple Sign-In, Google Sign-In, display name update, `authStateChanges` |
-| `lib/core/logger.dart` | Global `talker` instance (TalkerFlutter, 500-item ring buffer) |
-| `lib/core/models/match_model.dart` | Central match model; `isLocked` computed getter |
-| `lib/core/models/prediction_model.dart` | Prediction with full points breakdown |
-| `lib/core/theme/app_colors.dart` | "Stadium Night" dark palette + `ColorScheme` + `forPosition()` |
-| `lib/core/theme/app_theme.dart` | `appTheme` — Material3 dark, Google Fonts |
-| `lib/shared/providers/auth_provider.dart` | `authRepositoryProvider`, `currentUserProvider` |
-| `lib/shared/widgets/match_card.dart` | Primary match display widget (live/final/scheduled states) |
-| `lib/features/matches/predict_logic.dart` | Pure helpers: `predictTabLocked` + `sanitisePredictionPicks` (unit-tested) |
-| `lib/features/groups/invite_code.dart` | `kInviteCodeLength = 8` + `generateInviteCode()` — single source of truth for create/regenerate/join |
-| `lib/features/groups/group_name.dart` | `validateGroupName` shared between create + rename (min 2, max 40 chars after trim) |
-| `lib/features/dev/simulation_screen.dart` | Dev tool driving `simulate_live_match()` RPC step-by-step |
-| `lib/features/auth/social_sign_in_screen.dart` | Social authentication screen with Apple/Google Sign-In buttons |
-| `supabase/migrations/001_initial_schema.sql` | Full DB schema, triggers, `compute_match_scoring()` |
-| `supabase/migrations/006_fix_rls_recursion.sql` | `is_group_member()` SECURITY DEFINER (breaks RLS recursion) |
-| `supabase/migrations/009_simulation_rpc.sql` | `simulate_live_match(step_num int)` dev RPC |
-| `supabase/migrations/017_rules_md_scoring.sql` | Mutually-exclusive match scoring (5/3/2) + goalscorer 8; reshapes `predictions` columns |
-| `supabase/migrations/018_tournament_predictions.sql` | WC winner + Golden Boot picks + `tournament_results` mirror |
-| `supabase/migrations/019_group_standings_v3.sql` | Materialised leaderboard view including tournament bonus |
-| `supabase/migrations/022_first_team_to_score.sql` | Adds `predicted_first_team_id` + `points_first_team`; validation + lock triggers; recomputes all finalized matches |
-| `supabase/functions/poll_live_matches/index.ts` | Match result + event sync (every 1 min) |
-| `test/regression/regression.test.ts` | 91-test Bun regression suite (10 blocks including First Team scoring + validation) |
-| `test/regression/helpers.ts` | adminClient/anonClient/userClient, fixture helpers, teardown |
-| `pubspec.yaml` | Dart SDK `>=3.0.0 <4.0.0`; all Flutter deps |
-| `run.sh` | Dev run script — reads `.env`, passes `--dart-define` flags |
-| `SOCIAL_AUTH_SETUP.md` | Complete setup guide for Apple Sign-In and Google Sign-In configuration |
-| `analysis_options.yaml` | Lint config (flutter_lints defaults, no overrides) |
+| `lib/main.dart` | Bootstrap: init Supabase + Talker, optional `DEV_AUTOLOGIN_USER`/`DEV_INITIAL_ROUTE`, `ProviderScope` → `runApp` |
+| `lib/app.dart` | `WcPredictApp` — `MaterialApp.router` + `appTheme` + Talker FAB |
+| `lib/router.dart` + `lib/router_redirect.dart` | All routes + 3-tab shell + auth redirect (pure-Dart, testable) |
+| `lib/firebase_options.dart` | FlutterFire-generated; consumed only by `push_notifications.dart` |
+| `lib/core/env.dart` | `Env.supabaseUrl` / `Env.supabaseAnonKey` / Google client IDs (`--dart-define`) |
+| `lib/core/supabase_client.dart` | `initSupabase()`, global `supabase` getter, LoggingHttpClient wiring |
+| `lib/core/auth_repository.dart` | Apple/Google native sign-in with nonce + ID-token exchange; profile + push registration |
+| `lib/core/scoring_rules.dart` | **Single source of truth** for point/multiplier constants (mirrored in SQL) |
+| `lib/core/push_notifications.dart` | FCM lifecycle, abstract `FcmGateway`, bg handler |
+| `lib/core/models/match_model.dart` | `isLocked` + multiplier getters + value equality |
+| `lib/core/models/prediction_model.dart` | Full points breakdown + outcome flags |
+| `lib/core/theme/app_colors.dart` | Stadium Night palette + `ColorScheme` + `forPosition()` |
+| `lib/shared/providers/matches_provider.dart` | Baseline + realtime overlay split; `liveMatchProvider.family` |
+| `lib/shared/providers/match_predictions_provider.dart` | RLS-aware ranked rows for prediction tab (self pinned at index 0) |
+| `lib/shared/widgets/app_feedback.dart` | Global `appMessengerKey` + styled snackbars |
+| `lib/shared/widgets/app_sheet.dart` | `showAppSheet<T>()` standard bottom-sheet presenter |
+| `lib/shared/utils/live_minute.dart` | Broadcast-minute label (handles HT/ET/BT/P/PEN/INT api-sports periods) |
+| `lib/features/matches/predict_logic.dart` | `predictTabLocked` + `sanitisePredictionPicks` (mirror of DB triggers) |
+| `lib/features/matches/live_scoring.dart` | Dart mirror of `compute_match_scoring()` for live preview |
+| `lib/features/matches/booster_logic.dart` | Knockout-round booster state machine |
+| `lib/features/groups/invite_code.dart` | `kInviteCodeLength=8` + `generateInviteCode()` (shared by create/join) |
+| `lib/features/groups/group_name.dart` | `validateGroupName` (min 2, max 40 after trim) |
+| `supabase/migrations/001_initial_schema.sql` | Full schema + `compute_match_scoring()` |
+| `supabase/migrations/017_rules_md_scoring.sql` | Mutually-exclusive match scoring shape |
+| `supabase/migrations/022_first_team_to_score.sql` | First-team bonus + validation triggers |
+| `supabase/migrations/038_booster_change_recomputes_scoring.sql` | Latest scoring re-evaluation trigger |
+| `supabase/functions/poll_live_matches/index.ts` | Live polling (events + scores), every 1 min |
+| `test/regression/regression.test.ts` | 144-test Bun regression suite (18 suites) |
+| `test/regression/helpers.ts` | `adminClient` / `anonClient` / `userClient`, fixture insert/teardown |
+| `pubspec.yaml` | Dart `>=3.0.0 <4.0.0`; all deps |
+| `run.sh` / `build.sh` / `archive.sh` / `build_aab.sh` / `build_apk.sh` | Dev/build/release scripts |
+| `analysis_options.yaml` | `flutter_lints/flutter.yaml` only — no overrides |
+| `rules.md` | Canonical scoring spec (mirrored by `scoring_rules.dart`) |
+| `SOCIAL_AUTH_SETUP.md`, `APPLE_SIGNIN_KEY_SETUP.md`, `PRIVACY_PRODUCTION_TODO.md` | Setup + release checklists |
 
 ---
 
 ## Runtime / Tooling Preferences
 
-- **Flutter**: stable channel. Dart SDK `>=3.0.0 <4.0.0`.
-- **iOS**: deployment target **13.0**; CocoaPods 1.16.2.
-- **Android**: Java 11 / Kotlin 2.1.0; AGP 8.9.1. `compileSdk`/`minSdk` from Flutter defaults. Release signing uses debug key — configure before production. Gradle `-Xmx8G`.
-- **Supabase CLI**: required for local dev and migrations.
-- **Deno v2**: runtime for edge functions (managed by Supabase, `per_worker` mode).
-- **Bun**: used for the regression test suite (`test/regression/`). No Bun tooling elsewhere.
-- **No Node in edge functions**: edge functions are TypeScript/Deno only.
-- **Credentials**: never hardcoded. Flutter: `--dart-define` at build time from `.env` via `run.sh`. Edge functions: `SUPABASE_SERVICE_ROLE_KEY` + `APISPORTS_KEY` from Supabase Vault.
-
-### Key Dependencies
-
-**Runtime:** `supabase_flutter ^2.8.4`, `flutter_riverpod ^2.6.1`, `go_router ^14.6.3`, `talker_flutter ^5.1.16`, `google_fonts ^6.2.1`, `flutter_animate ^4.5.2`, `cached_network_image ^3.4.1`, `shimmer ^3.0.0`, `intl ^0.20.2`, `uuid ^4.5.1`, `material_symbols_icons ^4.2784.0`.
-
-**Dev:** `build_runner ^2.4.15`, `riverpod_generator ^2.6.5`, `custom_lint ^0.7.5`, `riverpod_lint ^2.6.5`, `flutter_lints ^5.0.0`. No `mockito`/`mocktail`, no coverage tooling.
+- **Flutter**: stable channel (`d693b4b9` per `.metadata`). Dart SDK `>=3.0.0 <4.0.0`.
+- **iOS**: deployment target **13.0** (set in `project.pbxproj`; commented out in `Podfile`). CocoaPods **1.16.2**. Bundle ID `com.dlovric.wcpredict2026`; URL schemes `wcpredict://` + reversed Google client ID. Entitlements: `com.apple.developer.applesignin = [Default]`, `aps-environment = development`.
+- **Android**: AGP **8.9.1**, Kotlin **2.1.0**, Google Services **4.4.2**; Java/Kotlin target **11**; `targetSdk=34`, `compileSdk`/`minSdk`/`ndk` from Flutter defaults. Gradle `-Xmx8G -XX:MaxMetaspaceSize=4G`. Google Services plugin applies **conditionally** if `google-services.json` exists. App Links: `${appLinkDomain}/auth/callback` with `autoVerify`. Release signing pulls from `key.properties`; falls back to debug keystore.
+- **Supabase CLI**: required. PostgreSQL **17**.
+- **Deno v2**: required runtime for edge functions (`per_worker` policy, inspector :8083).
+- **Bun**: only for `test/regression/`; no Bun elsewhere.
+- **No Node** in edge functions.
+- **Credentials**: never hardcoded. Flutter: `--dart-define` from `.env` via scripts. Edge functions: `SUPABASE_SERVICE_ROLE_KEY` + `APISPORTS_KEY` from Supabase Vault.
 
 ### Required Environment Variables
 
@@ -413,92 +422,100 @@ Global `talker` (500-item ring buffer) from `lib/core/logger.dart`. `app.dart` w
 |---|---|---|
 | `SUPABASE_URL` | `.env` → `--dart-define` | Project API URL |
 | `SUPABASE_ANON_KEY` | `.env` → `--dart-define` | Public client key |
+| `GOOGLE_SERVER_CLIENT_ID` | `.env` → `--dart-define` | Google OAuth Web Client ID (ID-token exchange) |
+| `IOS_REVERSED_CLIENT_ID` | `.env` → `--dart-define` | Reversed iOS Client ID (URL scheme) |
+| `APP_LINK_DOMAIN` | env at build time | Android App Links host (e.g. `wcpredict-auth.vercel.app`) |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase Vault | Edge function admin access |
-| `APISPORTS_KEY` | Supabase Vault | api-sports.io football data |
-| `GOOGLE_SERVER_CLIENT_ID` | `.env` → `--dart-define` | Google OAuth Web Client ID |
-| `IOS_REVERSED_CLIENT_ID` | `.env` → `--dart-define` | Reversed iOS Client ID for URL scheme |
+| `APISPORTS_KEY` | Supabase Vault | api-sports.io data |
 
-### Supabase Local Config (config.toml)
+### Key Dependencies (declared / resolved)
 
-- API: `:54321`, DB: `:54322`, shadow: `:54320`, Studio: `:54323`, Inbucket (email): `:54324`, Analytics: `:54327`.
-- PostgreSQL 17. Auth: JWT 3600s, signup enabled, email confirmations off, refresh token rotation on. Storage: 50 MiB. Edge runtime: Deno v2 `per_worker`, inspector `:8083`. Max API rows: 1000.
+Runtime: `supabase_flutter ^2.8.4 → 2.12.4`, `flutter_riverpod ^2.6.1`, `go_router ^14.6.3 → 14.8.1`, `firebase_core ^3.6.0 → 3.15.2`, `firebase_messaging ^15.1.3 → 15.2.10`, `google_sign_in ^6.2.2 → 6.3.0`, `sign_in_with_apple ^6.1.4`, `crypto ^3.0.5`, `http ^1.2.0`, `talker_flutter ^5.1.16`, `google_fonts ^6.2.1 → 6.3.3`, `flutter_animate ^4.5.2`, `cached_network_image ^3.4.1`, `shimmer ^3.0.0`, `intl ^0.20.2`, `uuid ^4.5.1`, `material_symbols_icons ^4.2784.0`, `url_launcher ^6.3.2`, `package_info_plus ^8.0.0`.
+
+Dev: `flutter_lints ^5.0.0`, `build_runner ^2.4.15`, `riverpod_generator ^2.6.5`, `custom_lint ^0.7.5`, `riverpod_lint ^2.6.5`, `flutter_launcher_icons ^0.14.3`, `shared_preferences ^2.3.0`. **No `mockito` / `mocktail`**; no coverage tooling.
 
 ---
 
 ## Testing & QA
 
-### Flutter tests (`flutter test`, ~5s, 132 tests)
+### Flutter tests (`flutter test`, pure Dart, ~363 tests)
 
-No Supabase / network dependencies — runs as pure Dart unit + widget tests.
+No Supabase / network required.
 
-```
-test/
-  models/                 — JSON round-trip + computed-getter tests for every model
-    prediction_model_test.dart   (7)
-    match_model_test.dart        (15 — incl. kickoff boundary, multipliers)
-    team_model_test.dart         (4)
-    player_model_test.dart       (5)
-    group_model_test.dart        (4 — GroupModel + GroupMemberModel)
-    group_standing_model_test.dart (4)
-    match_event_model_test.dart  (10 — incl. minuteLabel branches)
-    profile_model_test.dart      (2)
-    round_booster_model_test.dart (4)
-    tournament_prediction_model_test.dart (4)
-    tournament_results_model_test.dart   (7)
-  widgets/                — focused widget tests for shared UI components
-    verdict_pill_test.dart       (16 — every label/branch combination)
-    match_card_test.dart         (8 — live / final / locked / scheduled state machine)
-    countdown_pill_test.dart     (5)
-    team_flag_test.dart          (6 — TBD / code / flagUrl modes)
-  features/               — pure-logic helpers extracted from feature screens
-    predict_logic_test.dart      (18 — lock decision × Realtime override; bonus-pick sanitisation)
-    invite_code_test.dart        (4 — length + uniqueness + format)
-    group_name_test.dart         (8 — min/max/trim)
-  widget_test.dart        — harness placeholder
-  generate_icon.dart      — NOT a test (intentionally lacks `_test` suffix); icon-generation tool
-```
+| Area | Files | Tests | Notes |
+|---|---:|---:|---|
+| `test/models/` | 11 | 70 | JSON round-trips, null defense, numeric-from-double, computed getters |
+| `test/widgets/` | 6 | 47 | `MatchCard`, `VerdictPill`, `FirstTeamPicker`, `CountdownPill`, `TeamFlag`, `AppSheetBody` |
+| `test/features/` | 14 | 165 | Pure helpers + provider behavior (`predict_logic`, `booster_logic`, `live_scoring`, `matches_filter`, `live_events_format`, `predictions_tab`, `predict_logic`, `teams_tab_logic`, `auth_callback_helpers`, `invite_code`, `group_name`, `rules_screen`, `current_user_id_provider`, `predictions_visual` — visual smoke is gated behind `_runVisualSmoke`) |
+| `test/core/` | 2 | 23 | `scoring_rules_test.dart` (canonical invariants, multiplier monotonicity); `push_notifications_test.dart` (idempotency + lifecycle with `FakeFcmGateway`) |
+| `test/shared/` | 4 | 58 | `live_minute_test.dart` (38 tests — api-sports periods exhaustive), `live_match_provider_test.dart`, `date_format_test.dart`, `score_format_test.dart` |
+| Root | 3 | 9 | `router_redirect_test.dart` (auth redirect), `widget_test.dart` (harness), `generate_icon.dart` (icon-generation tool, not really a test) |
 
-### Regression suite (`test/regression/`, ~66s, 91 tests)
+`test/generate_icon.dart` is a **tool** disguised as a test — it renders `AppLogo` to a 1024×1024 PNG via `testWidgets` screenshot. Do not delete it thinking it's stale.
 
-**Bun** + `bun:test` + `@supabase/supabase-js` 2.106.2, strict TypeScript 5. Runs against a **live Supabase instance** (URL/anon/service-role keys in `helpers.ts`). Use a local stack (`supabase start`) for everyday development — pointing the suite at the production project is destructive.
+### Regression suite (`test/regression/`, Bun)
 
-| Suite | Tests | Covers |
-|---|---|---|
-| Auth & Profiles | 5 | profile creation, display-name updates |
-| Groups | 9 | create/join/leave/delete + RLS |
-| Predictions CRUD | 8 | INSERT/UPDATE/DELETE through anon + user clients |
-| Lock Predictions | 5 | DB trigger + `lock_predictions` edge function |
-| Scoring Engine | 11 | mutually-exclusive match awards + goalscorer + multiplier + own-goal/ET exclusion |
-| **First Team to Score** | 7 | correct pick = 2pts, stacks with match/GS, own goals + ET ignored |
-| **First Team Validation** | 4 | triggers reject 0-0 pick, 0-side pick, off-match pick; accept valid |
-| Edge Cases | 5 | ET/pens stored, no scoring impact |
-| Leaderboard | 2 | `group_standings` reflects totals + tiebreakers |
-| RLS | 6 | cross-user visibility on every table |
-| **Total** | **91** | |
+**144 tests across 18 `describe` blocks**, ~1 minute, against a **live Supabase project**. Defaults in `helpers.ts` point at the production URL — use a local stack for everyday work (`supabase start`, then update `SUPABASE_URL`/keys with values from `supabase status -o env`). CLI v2.75+ uses ES256-signed JWTs for the auth admin endpoint; HS256 keys from `supabase status` work for PostgREST but not for `auth.admin.createUser` — sign with the JWK private key in `supabase_auth_<project>` env if needed.
 
-`helpers.ts` exports `adminClient`/`anonClient`/`userClient`, `insertTestFixtures` (48 teams + players + 5 fixtures), `teardownTestData`. Test users alice/bob/charlie created in `beforeAll`, torn down in `afterAll`. Stable test IDs in the `99_000+` range avoid collisions with real data.
+Suites:
+
+1. Auth & Profiles
+2. Groups
+3. Predictions — CRUD & Constraints
+4. Prediction Lock — DB Trigger
+5. Lock Predictions (edge function)
+6. Scoring Engine
+7. First Team to Score
+8. First Team Validation
+9. Knockout Boosters
+10. Knockout Booster Edge Cases
+11. Edge Cases (ET / pens stored, no scoring impact)
+12. Leaderboard — `group_standings`
+13. RLS — Cross-User Prediction Visibility
+14. Tournament Predictions
+15. Device tokens
+16. Predict reminders
+17. Poll lineups guard
+18. Match lineups
+
+`helpers.ts` exports `anonClient`, `adminClient`, `userClient(name)`, `insertTestFixtures` (48 teams + players + fixtures), `teardownTestData`, `assertNoError`, `sleep`. Three global users (`alice`, `bob`, `charlie`) created in `beforeAll`, torn down in `afterAll`. Stable test IDs: matches ≥ 100_000, teams/players ≥ 99_000 — all excluded from production queries.
+
+Run:
 
 ```bash
 cd test/regression
-bun install      # first time
+bun install   # first time
 bun test
 ```
 
-To run against a local stack, swap `SUPABASE_URL` + `ANON_KEY` + `SERVICE_KEY` in `helpers.ts` for the values printed by `supabase status -o env`. Note: CLI v2.75+ uses ES256-signed JWTs for the auth admin endpoint — the legacy HS256 keys from `supabase status` work for PostgREST but not for `auth.admin.createUser`. Sign tokens with the JWK private key in `supabase_auth_<project>` env (see `test/regression/README` if present, or look at `GOTRUE_JWT_KEYS` in the auth container).
-
 ### Constraints
 
-- Real integration tests require a running Supabase instance. `supabase start` spins up a local stack.
-- No mocking libraries installed. Add `mockito`/`mocktail` to `dev_dependencies` before writing mock-based unit tests.
-- `riverpod_generator`/`build_runner` are staged but no `@riverpod` code exists. Running `build_runner` with no annotated sources is a no-op.
+- No mocking libraries installed. Test the **pure helpers** that screens delegate to (`predict_logic.dart`, `live_scoring.dart`, etc.) rather than reaching into private widgets.
+- `riverpod_generator`/`build_runner` are staged but **no annotated sources exist**. Running `build_runner` is currently a no-op.
 - iOS: empty `RunnerTests.swift` stub. Android: no test sources.
-- **Private widget access**: prefer extracting pure logic (e.g. `predict_logic.dart`) into a top-level public helper and testing that, rather than exposing `_PredictTab` / similar private classes for testability.
+- Visual golden-file tests in `test/features/predictions_visual_test.dart` are gated behind `const _runVisualSmoke = false`; flip and run manually.
 
 ### Testing Priorities (when adding coverage)
 
-1. **Cross-file invariants first**: any constant or rule referenced from multiple files (`kInviteCodeLength`, `kGroupNameMaxLength`, scoring point values) MUST have a test that fails if any single site drifts.
+1. **Cross-file invariants** — any constant referenced from multiple sites (`kPointsExact`, `kInviteCodeLength`, `kGroupNameMaxLength`, multiplier tables) MUST have a test that fails when any single site drifts. `test/core/scoring_rules_test.dart` is the model.
 2. Model `fromJson`/`toJson` round-trips — pure Dart, no Flutter deps.
-3. Pure logic helpers extracted from screen widgets — see `predict_logic.dart` pattern.
-4. `isLocked` + `predictTabLocked` boundary cases.
-5. Auth redirect logic in `router.dart` (currently uncovered — requires injectable auth state).
-6. `compute_match_scoring` SQL function — covered by the regression suite (`Scoring Engine` + `First Team` blocks).
+3. Pure helpers extracted from screen widgets (`*_logic.dart`).
+4. `isLocked` + `predictTabLocked` boundary cases (kickoff seconds before/after now, status overrides).
+5. `compute_match_scoring` SQL function + triggers — covered by regression `Scoring Engine`, `First Team`, `Knockout Boosters` blocks.
+
+---
+
+## Notable Quirks / Gotchas
+
+- **Firebase is FCM-only.** `firebase_options.dart` exists and `firebase_core` is initialised inside `PushNotifications`. No analytics/crashlytics/storage. Builds tolerate missing `google-services.json` (Android plugin applies conditionally).
+- **Score separator** is `'\u00A0\u2013\u00A0'` (NBSP + en-dash + NBSP) — `kScoreSeparator` in `score_format.dart`. A plain hyphen or space breaks display sizes.
+- **Self pinned at index 0** in prediction rankings (`predictionsForMatchProvider`), even with 0 points or no prediction.
+- **RLS-hidden picks**: opponent predictions filter on `locked_at IS NOT NULL`; UI shows `_HiddenPicksRow` placeholder until lock.
+- **Apple `givenName`/`familyName` arrive only on first sign-in.** Captured by `AuthRepository.signInWithApple` and passed to `_ensureProfile`; subsequent sign-ins omit them.
+- **Lineup gate** uses `formation_team1`/`formation_team2` on the match row, not a player-count check (stale rows from previous fixtures can mislead counts).
+- **Day filter is LOCAL calendar** (`filterMatchesByDay` uses local midnight). A 23:30Z kickoff appears under "tomorrow" for UTC+2 viewers.
+- **Test fixture ID ranges**: matches ≥ 100_000, teams/players ≥ 99_000 — excluded from prod queries. `kSimMatchId = 999001` is the in-app simulation slot.
+- **Talker runs in release.** Logs are field-debuggable from Profile → "View logs".
+- **`/dev/*` routes only mount in `kDebugMode`** — production builds cannot reach them even by URL.
+- **`.mock-data/` is a git worktree** (branch `mock-data`) carrying a parallel mock-data layer; `.mock-data/run.sh` drives a Supabase-free build for offline match-detail timeline testing. Not part of the main build.
+- **VS Code `launch.json` hardcodes an iPhone UDID** (`00008140-001A40623ADB801C`) — use the "auto-select device" config on shared machines.
