@@ -9,23 +9,38 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js";
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
-// Defaults target the live project; export `SUPABASE_REGRESSION_URL` /
-// `_ANON` / `_SERVICE` to redirect the suite at a local stack (e.g.
-// the values printed by `supabase status -o env` after `supabase
-// start`). The fallback keys below are HS256-signed (legacy format),
-// which PostgREST accepts but `auth.admin.createUser` does not on
-// CLI v2.75+; supply the local SERVICE key from `supabase status`
-// when running locally.
-export const SUPABASE_URL =
-  process.env.SUPABASE_REGRESSION_URL ?? "https://txziwjxvfprjilfyibol.supabase.co";
+// Credentials MUST be supplied via env. There is no in-file fallback by
+// design — committing keys (especially `service_role`) to a public repo
+// is a one-way trip: rotating after exposure is the only real fix, so
+// we forbid the literal here entirely.
+//
+// For a local Supabase stack (`supabase start`), copy values from
+// `supabase status -o env`. For the live project, take them from the
+// dashboard → Project Settings → API.
+//
+// Required: SUPABASE_REGRESSION_URL, SUPABASE_REGRESSION_ANON,
+// SUPABASE_REGRESSION_SERVICE. Optional: nothing.
+//
+// Note: CLI v2.75+ signs the auth admin endpoint with ES256, so the
+// legacy HS256 keys printed by `supabase status` work for PostgREST
+// but not for `auth.admin.createUser` against a fresh local stack —
+// sign with the JWK private key in the `supabase_auth_<project>`
+// container env (`GOTRUE_JWT_KEYS`).
+function requireEnv(name: string): string {
+  const v = process.env[name];
+  if (!v || v.length === 0) {
+    throw new Error(
+      `[regression suite] missing env ${name}. ` +
+      `Set SUPABASE_REGRESSION_URL/_ANON/_SERVICE before running bun test. ` +
+      `Never commit live keys to this repo — rotate immediately if you do.`
+    );
+  }
+  return v;
+}
 
-export const ANON_KEY =
-  process.env.SUPABASE_REGRESSION_ANON ??
-  "REDACTED-ANON-JWT";
-
-export const SERVICE_KEY =
-  process.env.SUPABASE_REGRESSION_SERVICE ??
-  "REDACTED-SERVICE-ROLE-JWT";
+export const SUPABASE_URL  = requireEnv("SUPABASE_REGRESSION_URL");
+export const ANON_KEY      = requireEnv("SUPABASE_REGRESSION_ANON");
+export const SERVICE_KEY   = requireEnv("SUPABASE_REGRESSION_SERVICE");
 
 // ─── Test constants ────────────────────────────────────────────────────────────
 
